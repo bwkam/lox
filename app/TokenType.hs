@@ -23,9 +23,11 @@ data TokenType
   | Less
   | LessEqual
   | -- Literals
-    Identifier
-  | StringLit
-  | Number
+    Identifier String
+  | StringLit String
+  | Number Double
+  | -- Comments
+    Comment String
   | -- Keywords
     And
   | Class
