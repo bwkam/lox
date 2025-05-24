@@ -7,8 +7,8 @@ import Data.Functor.Identity
 import Data.Text
 import qualified Data.Text as T
 import Data.Void
-import Text.Megaparsec (ParseErrorBundle, ParsecT, choice, eof, many, manyTill, parse, satisfy, try, (<|>))
-import Text.Megaparsec.Char (char, space)
+import Text.Megaparsec (ParseErrorBundle, ParsecT, choice, empty, eof, many, manyTill, parse, satisfy, try, (<|>))
+import Text.Megaparsec.Char (char, space, space1)
 import qualified Text.Megaparsec.Char.Lexer as L
 import Token
 import TokenType
@@ -23,7 +23,12 @@ type ScannerResult = Either (ParseErrorBundle Text Void) [Token]
 -- type ScannerResult = Either String [Token]
 
 scan :: String -> ScannerResult
-scan src = parse (many scanToken <* eof) "" (T.pack src)
+scan src = parse (sc *> many (scanToken <* sc) <* eof) "" (T.pack src)
+
+sc :: Parser ()
+sc = L.space space1 lineCmnt Text.Megaparsec.empty
+  where
+    lineCmnt = L.skipLineComment "//"
 
 scanToken :: Parser Token
 scanToken =
