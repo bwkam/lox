@@ -1,6 +1,5 @@
 module Lox where
 
-import Control.Monad (when)
 import qualified Data.ByteString as B
 import System.Environment (getArgs)
 import System.Exit (ExitCode (ExitFailure), exitWith)

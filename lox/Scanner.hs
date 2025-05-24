@@ -34,10 +34,10 @@ scanToken :: Parser Token
 scanToken =
   try $
     scanCommentToken 1
+      <|> try (scanNumberToken 1)
       <|> try (scanDoubleToken 1)
       <|> try (scanSingleToken 1)
       <|> try (scanStringToken 1)
-      <|> try (scanNumberToken 1)
       <|> try (scanKeywordToken 1)
 
 scanSingleToken :: Int -> Parser Token

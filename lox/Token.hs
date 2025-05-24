@@ -12,5 +12,4 @@ data Token = Token
 
 instance Show Token where
   show :: Token -> String
-  show (Token tt (Just lx) _) = show tt <> " " <> lx <> " "
-  show (Token tt Nothing _) = show tt
+  show (Token tt _ _) = show tt

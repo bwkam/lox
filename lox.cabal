@@ -65,6 +65,7 @@ executable lox
                       TokenType
                       Token
                       Scanner
+                      Expr
 
     -- LANGUAGE extensions used by modules in this package.
     -- other-extensions:
@@ -76,7 +77,17 @@ executable lox
                       text
 
     -- Directories containing source files.
-    hs-source-dirs:   app
+    hs-source-dirs:   lox
 
     -- Base language which the package is written in.
+    default-language: Haskell2010
+
+executable print_ast
+    import:           warnings
+    main-is:          Main.hs
+    hs-source-dirs:   tool
+    build-depends:    base ^>=4.18.3.0,
+                      bytestring,
+                      megaparsec,
+                      text
     default-language: Haskell2010
