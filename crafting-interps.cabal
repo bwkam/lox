@@ -64,13 +64,16 @@ executable crafting-interps
     other-modules:    Lox
                       TokenType
                       Token
+                      Scanner
 
     -- LANGUAGE extensions used by modules in this package.
     -- other-extensions:
 
     -- Other library packages from which modules are imported.
     build-depends:    base ^>=4.18.3.0,
-                      bytestring
+                      bytestring, 
+                      megaparsec, 
+                      text
 
     -- Directories containing source files.
     hs-source-dirs:   app

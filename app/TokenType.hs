@@ -1,4 +1,4 @@
-module TokenType (TokenType) where
+module TokenType (TokenType (..)) where
 
 data TokenType
   = -- Single-character tokens
