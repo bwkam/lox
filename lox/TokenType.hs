@@ -46,7 +46,7 @@ data TokenType
   | Var
   | While
   | EOF
-  deriving (Eq)
+  deriving (Eq, Ord)
 
 instance Show TokenType where
   show token = case token of

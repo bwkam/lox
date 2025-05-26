@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Scanner (scan) where
+module Scanner (scan, ScannerResult, Parser) where
 
 import Data.Char (isLetter)
 import Data.Functor.Identity
@@ -18,7 +18,7 @@ type Parsec e s a = ParsecT e s Identity a
 type Parser a = Parsec Void Text a
 
 -- idk what the second Text does, custom component
-type ScannerResult = Either (ParseErrorBundle Text Void) [Token]
+type ScannerResult = Either (ParseErrorBundle Text Void) [LoxTok]
 
 -- type ScannerResult = Either String [Token]
 
@@ -30,7 +30,7 @@ sc = L.space space1 lineCmnt Text.Megaparsec.empty
   where
     lineCmnt = L.skipLineComment "//"
 
-scanToken :: Parser Token
+scanToken :: Parser LoxTok
 scanToken =
   try $
     scanCommentToken 1
@@ -40,7 +40,7 @@ scanToken =
       <|> try (scanStringToken 1)
       <|> try (scanKeywordToken 1)
 
-scanSingleToken :: Int -> Parser Token
+scanSingleToken :: Int -> Parser LoxTok
 scanSingleToken line =
   choice
     [ makeToken LeftParen "(",
@@ -60,10 +60,10 @@ scanSingleToken line =
       makeToken Less "<"
     ]
   where
-    makeToken :: TokenType -> String -> Parser Token
-    makeToken tt str = Token tt Nothing line <$ L.symbol space (T.pack str)
+    makeToken :: TokenType -> String -> Parser LoxTok
+    makeToken tt str = LoxTok tt Nothing line <$ L.symbol space (T.pack str)
 
-scanDoubleToken :: Int -> Parser Token
+scanDoubleToken :: Int -> Parser LoxTok
 scanDoubleToken line =
   choice
     [ makeToken BangEqual "!=",
@@ -72,18 +72,18 @@ scanDoubleToken line =
       makeToken LessEqual "<="
     ]
   where
-    makeToken :: TokenType -> String -> Parser Token
-    makeToken tt str = Token tt Nothing line <$ L.symbol space (T.pack str)
+    makeToken :: TokenType -> String -> Parser LoxTok
+    makeToken tt str = LoxTok tt Nothing line <$ L.symbol space (T.pack str)
 
-scanStringToken :: Int -> Parser Token
+scanStringToken :: Int -> Parser LoxTok
 scanStringToken line = do
   c <- char '\"' *> manyTill L.charLiteral (char '\"')
-  return $ Token (StringLit c) Nothing line
+  return $ LoxTok (StringLit c) Nothing line
 
-scanNumberToken :: Int -> Parser Token
+scanNumberToken :: Int -> Parser LoxTok
 scanNumberToken line = do
   n <- try L.float <|> L.decimal
-  return $ Token (Number n) Nothing line
+  return $ LoxTok (Number n) Nothing line
 
 keywordMapping :: [(TokenType, String)]
 keywordMapping =
@@ -105,25 +105,25 @@ keywordMapping =
     (While, "while")
   ]
 
-scanIdentifierToken :: Int -> Parser Token
+scanIdentifierToken :: Int -> Parser LoxTok
 scanIdentifierToken line = do
   fc <- firstChar
   rest <- many otherChar
-  return $ Token (Identifier (fc : rest)) Nothing line
+  return $ LoxTok (Identifier (fc : rest)) Nothing line
   where
     firstChar = satisfy (\a -> isLetter a || a == '_')
     otherChar = satisfy isLetter
 
-scanKeywordToken :: Int -> Parser Token
+scanKeywordToken :: Int -> Parser LoxTok
 scanKeywordToken line = do
-  (Token tt _ _) <- scanIdentifierToken 1
+  (LoxTok tt _ _) <- scanIdentifierToken 1
   case tt of
     Identifier ident -> do
       let xs = [(tt', a) | (tt', a) <- keywordMapping, a == ident]
       case xs of
-        ((tt'', _) : _) -> return $ Token tt'' Nothing line
-        [] -> return $ Token (Identifier ident) Nothing line
+        ((tt'', _) : _) -> return $ LoxTok tt'' Nothing line
+        [] -> return $ LoxTok (Identifier ident) Nothing line
     _ -> fail "Expected Identifier"
 
-scanCommentToken :: Int -> Parser Token
-scanCommentToken line = Token (Comment "") Nothing line <$ L.skipLineComment "//"
+scanCommentToken :: Int -> Parser LoxTok
+scanCommentToken line = LoxTok (Comment "") Nothing line <$ L.skipLineComment "//"
