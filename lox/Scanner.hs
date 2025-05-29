@@ -20,8 +20,6 @@ type Parser a = Parsec Void Text a
 -- idk what the second Text does, custom component
 type ScannerResult = Either (ParseErrorBundle Text Void) [LoxTok]
 
--- type ScannerResult = Either String [Token]
-
 scan :: String -> ScannerResult
 scan src = parse (sc *> many (scanToken <* sc) <* eof) "" (T.pack src)
 

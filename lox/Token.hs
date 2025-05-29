@@ -1,10 +1,16 @@
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE InstanceSigs #-}
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TypeFamilies #-}
 
 module Token where
 
-import Text.Megaparsec (Stream (Tokens), Token)
-import TokenType (TokenType)
+import Data.List.NonEmpty (NonEmpty, toList)
+import Data.Proxy (Proxy)
+import Text.Megaparsec (Stream (Tokens), Token, VisualStream (showTokens, tokensLength))
+import TokenType (TokenType (Tab))
+
+type LoxToks = [LoxTok]
 
 data LoxTok = LoxTok
   { tokenType :: TokenType,
@@ -20,3 +26,9 @@ instance Show LoxTok where
 instance Stream LoxTok where
   type Token LoxTok = LoxTok
   type Tokens LoxTok = [LoxTok]
+
+instance VisualStream [LoxTok] where
+  showTokens :: Proxy [LoxTok] -> NonEmpty (Token [LoxTok]) -> String
+  showTokens _ ts = mconcat $ map show (toList ts)
+  tokensLength :: Proxy [LoxTok] -> NonEmpty (Token [LoxTok]) -> Int
+  tokensLength _ ts = length $ toList ts

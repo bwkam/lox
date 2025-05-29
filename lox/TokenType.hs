@@ -9,6 +9,8 @@ data TokenType
   | Comma
   | Dot
   | Minus
+  | Newline
+  | Tab
   | Plus
   | Semicolon
   | Slash
@@ -92,6 +94,8 @@ instance Show TokenType where
     Super -> "super"
     This -> "this"
     True_ -> "true"
+    Newline -> "\n"
+    Tab -> "tab"
     Var -> "var"
     While -> "while"
     EOF -> "EOF"

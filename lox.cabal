@@ -76,7 +76,8 @@ executable lox
                       bytestring, 
                       megaparsec, 
                       containers,
-                      text
+                      text, 
+                      diagnose ^>=2.5
 
     -- Directories containing source files.
     hs-source-dirs:   lox

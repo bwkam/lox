@@ -3,12 +3,15 @@
 {-# HLINT ignore "Use <$>" #-}
 module Parser where
 
+import Control.Monad (replicateM_, when)
 import Data.Functor.Identity (Identity)
+import Data.List (intercalate, intersperse)
+import Data.List.NonEmpty (NonEmpty, nonEmpty, toList)
+import Data.Maybe (fromJust)
 import qualified Data.Set as Set
 import Data.Void
-import Expr (Expr (Binary, Literal, Unary), LiteralValue (Number))
-import Text.Megaparsec (MonadParsec (lookAhead, try), ParsecT, Stream (Token), many, satisfy, single, token, (<|>))
-import qualified Text.Megaparsec.Char.Lexer as L
+import Expr (Expr (Binary, Literal, Unary), LiteralValue (Boolean, Nil, Number, String))
+import Text.Megaparsec (ErrorItem (EndOfInput, Label, Tokens), ParseError (FancyError, TrivialError), ParseErrorBundle (ParseErrorBundle), ParsecT, PosState (pstateSourcePos), SourcePos (sourceColumn, sourceLine), Stream (take1_), between, choice, getInput, parse, sourcePosPretty, token, unPos, (<|>))
 import Token (LoxTok (LoxTok))
 import TokenType (TokenType (..))
 
@@ -16,8 +19,36 @@ type Parsec e s a = ParsecT e s Identity a
 
 type Parser a = Parsec Void [LoxTok] a
 
--- parse :: [LoxTok] -> Parser Expr
--- parse src = parse
+type ParserResult = Either (ParseErrorBundle [LoxTok] Void) Expr
+
+parse' :: [LoxTok] -> IO ()
+parse' src = case Text.Megaparsec.parse expression "" src of
+  Right res -> print res
+  Left (ParseErrorBundle x pos_state) -> do
+    let errors = toList x
+    mapM_ f errors
+    where
+      f :: ParseError [LoxTok] Void -> IO ()
+      f (TrivialError offset unexpected_tokens expected_tokens) =
+        do
+          putStrLn ("Error at line " <> (show . unPos) (sourceLine $ pstateSourcePos pos_state) <> ", column " <> (show . (+ offset) . unPos) (sourceColumn $ pstateSourcePos pos_state))
+          let expected_tokens' = Set.toList expected_tokens
+          case unexpected_tokens of
+            Just err -> case err of
+              Tokens t -> putStrLn $ "unexpected tokens: " <> mconcat (map show (toList t))
+              Label l -> print l
+              EndOfInput -> putStrLn "end of input"
+            Nothing -> putStrLn "no errors"
+
+          let f' x = case x of
+                Tokens t -> "expected tokens: " <> mconcat (map show (toList t))
+                Label l -> toList l
+                EndOfInput -> "end of input"
+           in putStrLn ("expected tokens: " <> intercalate ", " (map f' expected_tokens'))
+      f (FancyError x _) = putStrLn "not handled [fancy error]"
+
+parse :: [LoxTok] -> ParserResult
+parse = Text.Megaparsec.parse expression ""
 
 expression :: Parser Expr
 expression = equality
@@ -29,7 +60,7 @@ equality = do
   go expr
   where
     parseOp expr = do
-      op <- matchMany [BangEqual, EqualEqual]
+      op <- choice [bangEqual, equalEqual]
       right <- comparison
       go (Binary expr op right)
 
@@ -43,7 +74,7 @@ comparison = do
   go expr
   where
     parseOp expr = do
-      op <- matchMany [Greater, GreaterEqual, Less, LessEqual]
+      op <- choice [greater, greaterEqual, less, lessEqual]
       right <- primary
       go (Binary expr op right)
 
@@ -57,7 +88,7 @@ term = do
   go expr
   where
     parseOp expr = do
-      op <- matchMany [Plus, Minus]
+      op <- choice [plus, minus]
       right <- term
       go (Binary expr op right)
 
@@ -71,7 +102,7 @@ factor = do
   go expr
   where
     parseOp expr = do
-      op <- matchMany [Slash, Star]
+      op <- choice [slash, star]
       right <- term
       go (Binary expr op right)
 
@@ -83,33 +114,131 @@ unary = do
   go <|> primary
   where
     go = do
-      op <- matchMany [Bang, Minus]
+      op <- choice [bang, minus]
       right <- unary
       return $ Unary op right
 
 primary :: Parser Expr
 primary = do
-  (LoxTok (TokenType.Number x) _ _) <- matchSingle (TokenType.Number 0)
-  pure $ Literal (Expr.Number x)
-
-matchMany :: [TokenType] -> Parser LoxTok
-matchMany tts = satisfy (\(LoxTok tt' _ _) -> any (matches tt') tts)
+  parseBool <|> parseNumOrString <|> parseGrouping
   where
-    matches :: TokenType -> TokenType -> Bool
-    matches tt' tt = case (tt, tt') of
-      (Identifier _, Identifier _) -> True
-      (TokenType.Number _, TokenType.Number _) -> True
-      (Comment _, Comment _) -> True
-      (StringLit _, StringLit _) -> True
-      _ -> tt == tt'
+    parseBool = choice [Literal (Boolean True) <$ true, Literal (Boolean False) <$ false, Literal Expr.Nil <$ nil]
+    parseNumOrString = choice [Literal . Expr.String <$> string, Literal . Expr.Number <$> number]
+    parseGrouping = between leftParen rightParen expression
 
-matchSingle :: TokenType -> Parser LoxTok
-matchSingle tt = satisfy f
+identifier :: Parser String
+identifier = token getIdent (Set.singleton (Label (fromJust $ nonEmpty "identifier")))
   where
-    f (LoxTok tt' _ _) =
-      case (tt, tt') of
-        (Identifier _, Identifier _) -> True
-        (TokenType.Number _, TokenType.Number _) -> True
-        (Comment _, Comment _) -> True
-        (StringLit _, StringLit _) -> True
-        _ -> tt == tt'
+    getIdent (LoxTok (Identifier ident) _ _) = Just ident
+    getIdent _ = Nothing
+
+number :: Parser Double
+number = token getNumber (Set.singleton (Label $ nonEmpty' "identifier"))
+  where
+    getNumber (LoxTok (TokenType.Number n) _ _) = Just n
+    getNumber _ = Nothing
+
+string :: Parser String
+string = token getString (Set.singleton (Label $ nonEmpty' "string"))
+  where
+    getString (LoxTok (TokenType.StringLit s) _ _) = Just s
+    getString _ = Nothing
+
+bang :: Parser LoxTok
+bang = token getBang (Set.singleton (Label $ nonEmpty' "!"))
+  where
+    getBang (LoxTok Bang _ _) = Just (LoxTok Bang Nothing 0)
+    getBang _ = Nothing
+
+minus :: Parser LoxTok
+minus = token getMinus (Set.singleton (Label $ nonEmpty' "-"))
+  where
+    getMinus (LoxTok Minus _ _) = Just (LoxTok Minus Nothing 0)
+    getMinus _ = Nothing
+
+bangEqual :: Parser LoxTok
+bangEqual = token getBangEqual (Set.singleton (Label $ nonEmpty' "!="))
+  where
+    getBangEqual (LoxTok BangEqual _ _) = Just (LoxTok BangEqual Nothing 0)
+    getBangEqual _ = Nothing
+
+slash :: Parser LoxTok
+slash = token getSlash (Set.singleton (Label $ nonEmpty' "/"))
+  where
+    getSlash (LoxTok Slash _ _) = Just (LoxTok Slash Nothing 0)
+    getSlash _ = Nothing
+
+star :: Parser LoxTok
+star = token getStar (Set.singleton (Label $ nonEmpty' "*"))
+  where
+    getStar (LoxTok Star _ _) = Just (LoxTok Star Nothing 0)
+    getStar _ = Nothing
+
+plus :: Parser LoxTok
+plus = token getPlus (Set.singleton (Label $ nonEmpty' "+"))
+  where
+    getPlus (LoxTok Plus _ _) = Just (LoxTok Plus Nothing 0)
+    getPlus _ = Nothing
+
+greater :: Parser LoxTok
+greater = token getGreater (Set.singleton (Label $ nonEmpty' ">"))
+  where
+    getGreater (LoxTok Greater _ _) = Just (LoxTok Greater Nothing 0)
+    getGreater _ = Nothing
+
+less :: Parser LoxTok
+less = token getLess (Set.singleton (Label $ nonEmpty' "<"))
+  where
+    getLess (LoxTok Less _ _) = Just (LoxTok Less Nothing 0)
+    getLess _ = Nothing
+
+greaterEqual :: Parser LoxTok
+greaterEqual = token getGreaterEqual (Set.singleton (Label $ nonEmpty' ">="))
+  where
+    getGreaterEqual (LoxTok GreaterEqual _ _) = Just (LoxTok GreaterEqual Nothing 0)
+    getGreaterEqual _ = Nothing
+
+lessEqual :: Parser LoxTok
+lessEqual = token getLessEqual (Set.singleton (Label $ nonEmpty' "<="))
+  where
+    getLessEqual (LoxTok LessEqual _ _) = Just (LoxTok LessEqual Nothing 0)
+    getLessEqual _ = Nothing
+
+equalEqual :: Parser LoxTok
+equalEqual = token getEqualEqual (Set.singleton (Label $ nonEmpty' "=="))
+  where
+    getEqualEqual (LoxTok EqualEqual _ _) = Just (LoxTok EqualEqual Nothing 0)
+    getEqualEqual _ = Nothing
+
+true :: Parser LoxTok
+true = token getTrue (Set.singleton (Label $ nonEmpty' "true"))
+  where
+    getTrue (LoxTok True_ _ _) = Just (LoxTok True_ Nothing 0)
+    getTrue _ = Nothing
+
+false :: Parser LoxTok
+false = token getFalse (Set.singleton (Label $ nonEmpty' "false"))
+  where
+    getFalse (LoxTok False_ _ _) = Just (LoxTok False_ Nothing 0)
+    getFalse _ = Nothing
+
+rightParen :: Parser LoxTok
+rightParen = token getRightParen (Set.singleton (Label $ nonEmpty' ")"))
+  where
+    getRightParen (LoxTok RightParen _ _) = Just (LoxTok RightParen Nothing 0)
+    getRightParen _ = Nothing
+
+leftParen :: Parser LoxTok
+leftParen = token getLeftParen (Set.singleton (Label $ nonEmpty' "("))
+  where
+    getLeftParen (LoxTok LeftParen _ _) = Just (LoxTok LeftParen Nothing 0)
+    getLeftParen _ = Nothing
+
+nil :: Parser LoxTok
+nil = token getNil (Set.singleton (Label $ nonEmpty' "nil"))
+  where
+    getNil (LoxTok TokenType.Nil _ _) = Just (LoxTok TokenType.Nil Nothing 0)
+    getNil _ = Nothing
+
+nonEmpty' :: String -> NonEmpty Char
+nonEmpty' s = fromJust $ nonEmpty s
