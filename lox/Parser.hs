@@ -23,34 +23,38 @@ type ParserResult = Either (ParseErrorBundle [LoxTok] Void) Expr
 
 -- case Text.Megaparsec.parse (withRecovery (\err -> skipManyTill (expression) (Literal Expr.Nil <$ semicolon)) (expression <* eof) `sepBy` semicolon) "" src of
 -- parse' src = case Text.Megaparsec.parse ((many expression) `sepBy` semicolon) "" src of
+
 parse' :: [LoxTok] -> IO ()
-parse' src = case Text.Megaparsec.parse (expression <* eof) "" src of
-  Right res -> print res
-  Left (ParseErrorBundle x pos_state) -> do
+parse' src = putStrLn $ Parser.parse src
+
+parse :: [LoxTok] -> String
+parse src = case Text.Megaparsec.parse (expression <* eof) "" src of
+  Right res -> show res
+  Left (ParseErrorBundle x pos_state) ->
     let errors = toList x
-    mapM_ f errors
-    where
-      f :: ParseError [LoxTok] Void -> IO ()
-      f (TrivialError offset unexpected_tokens expected_tokens) =
-        do
-          putStrLn ("Error at line " <> (show . unPos) (sourceLine $ pstateSourcePos pos_state) <> ", column " <> (show . (+ offset) . unPos) (sourceColumn $ pstateSourcePos pos_state))
-          let expected_tokens' = Set.toList expected_tokens
-          case unexpected_tokens of
-            Just err -> case err of
-              Tokens t -> putStrLn $ "unexpected tokens: " <> mconcat (map show (toList t))
-              Label l -> print l
-              EndOfInput -> putStrLn "end of input"
-            Nothing -> putStrLn "no errors"
-
-          let f' x = case x of
-                Tokens t -> "expected tokens: " <> mconcat (map show (toList t))
-                Label l -> toList l
-                EndOfInput -> "end of input"
-           in putStrLn ("expected tokens: " <> intercalate ", " (map f' expected_tokens'))
-      f (FancyError x _) = putStrLn "not handled [fancy error]"
-
-parse :: [LoxTok] -> ParserResult
-parse = Text.Megaparsec.parse (expression <* eof) ""
+     in unlines (map (f pos_state) errors)
+  where
+    f :: PosState [LoxTok] -> ParseError [LoxTok] Void -> String
+    f pos_state (TrivialError offset unexpected_tokens expected_tokens) =
+      let line = show . unPos $ sourceLine (pstateSourcePos pos_state)
+          column = show . (+ offset) . unPos $ sourceColumn (pstateSourcePos pos_state)
+          unexpected = case unexpected_tokens of
+            Just (Tokens t) -> "unexpected tokens: " <> mconcat (map show (toList t))
+            Just (Label l) -> "unexpected label: " <> toList l
+            Just EndOfInput -> "unexpected: end of input"
+            Nothing -> "no unexpected token"
+          expected_tokens' = Set.toList expected_tokens
+          f' x = case x of
+            Tokens t -> mconcat (map show (toList t))
+            Label l -> toList l
+            EndOfInput -> "end of input"
+          expected = "expected tokens: " <> intercalate ", " (map f' expected_tokens')
+       in unlines
+            [ "Error at line " <> line <> ", column " <> column,
+              unexpected,
+              expected
+            ]
+    f _ (FancyError _ _) = "not handled [fancy error]"
 
 expression :: Parser Expr
 expression = equality

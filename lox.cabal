@@ -77,7 +77,7 @@ executable lox
                       megaparsec, 
                       containers,
                       text, 
-                      diagnose ^>=2.5
+                      split
 
     -- Directories containing source files.
     hs-source-dirs:   lox
