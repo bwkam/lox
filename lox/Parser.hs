@@ -11,7 +11,7 @@ import Data.Maybe (fromJust)
 import qualified Data.Set as Set
 import Data.Void
 import Expr (Expr (Binary, Literal, Unary), LiteralValue (Boolean, Nil, Number, String))
-import Text.Megaparsec (ErrorItem (EndOfInput, Label, Tokens), ParseError (FancyError, TrivialError), ParseErrorBundle (ParseErrorBundle), ParsecT, PosState (pstateSourcePos), SourcePos (sourceColumn, sourceLine), Stream (take1_), between, choice, getInput, parse, sourcePosPretty, token, unPos, (<|>))
+import Text.Megaparsec (ErrorItem (EndOfInput, Label, Tokens), MonadParsec (eof, withRecovery), ParseError (FancyError, TrivialError), ParseErrorBundle (ParseErrorBundle), ParsecT, PosState (pstateSourcePos), SourcePos (sourceColumn, sourceLine), Stream (take1_), between, choice, getInput, many, parse, sepBy, sepBy1, skipManyTill, sourcePosPretty, token, unPos, (<|>))
 import Token (LoxTok (LoxTok))
 import TokenType (TokenType (..))
 
@@ -21,8 +21,10 @@ type Parser a = Parsec Void [LoxTok] a
 
 type ParserResult = Either (ParseErrorBundle [LoxTok] Void) Expr
 
+-- case Text.Megaparsec.parse (withRecovery (\err -> skipManyTill (expression) (Literal Expr.Nil <$ semicolon)) (expression <* eof) `sepBy` semicolon) "" src of
+-- parse' src = case Text.Megaparsec.parse ((many expression) `sepBy` semicolon) "" src of
 parse' :: [LoxTok] -> IO ()
-parse' src = case Text.Megaparsec.parse expression "" src of
+parse' src = case Text.Megaparsec.parse (expression <* eof) "" src of
   Right res -> print res
   Left (ParseErrorBundle x pos_state) -> do
     let errors = toList x
@@ -48,7 +50,7 @@ parse' src = case Text.Megaparsec.parse expression "" src of
       f (FancyError x _) = putStrLn "not handled [fancy error]"
 
 parse :: [LoxTok] -> ParserResult
-parse = Text.Megaparsec.parse expression ""
+parse = Text.Megaparsec.parse (expression <* eof) ""
 
 expression :: Parser Expr
 expression = equality
@@ -239,6 +241,12 @@ nil = token getNil (Set.singleton (Label $ nonEmpty' "nil"))
   where
     getNil (LoxTok TokenType.Nil _ _) = Just (LoxTok TokenType.Nil Nothing 0)
     getNil _ = Nothing
+
+semicolon :: Parser LoxTok
+semicolon = token getSemicolon (Set.singleton (Label $ nonEmpty' ";"))
+  where
+    getSemicolon (LoxTok TokenType.Semicolon _ _) = Just (LoxTok TokenType.Semicolon Nothing 0)
+    getSemicolon _ = Nothing
 
 nonEmpty' :: String -> NonEmpty Char
 nonEmpty' s = fromJust $ nonEmpty s
