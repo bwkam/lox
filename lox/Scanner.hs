@@ -1,13 +1,13 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Scanner (scan, ScannerResult, Parser) where
+module Scanner (Parser, scan, scan') where
 
 import Data.Char (isLetter)
 import Data.Functor.Identity
-import Data.Text
+import Data.Text hiding (length)
 import qualified Data.Text as T
 import Data.Void
-import Text.Megaparsec (ParseErrorBundle, ParsecT, choice, empty, eof, many, manyTill, parse, satisfy, try, (<|>))
+import Text.Megaparsec (ParseErrorBundle, ParsecT, SourcePos (SourcePos), choice, empty, eof, getOffset, getSourcePos, many, manyTill, parse, satisfy, try, (<|>))
 import Text.Megaparsec.Char (char, space, space1)
 import qualified Text.Megaparsec.Char.Lexer as L
 import Token
@@ -17,29 +17,33 @@ type Parsec e s a = ParsecT e s Identity a
 
 type Parser a = Parsec Void Text a
 
--- idk what the second Text does, custom component
-type ScannerResult = Either (ParseErrorBundle Text Void) [LoxTok]
+scan' :: String -> IO ()
+scan' src = case parse (sc *> many (scanToken <* sc) <* eof) "" (T.pack src) of
+  Right ts -> print ts
+  Left err -> print err
 
-scan :: String -> ScannerResult
-scan src = parse (sc *> many (scanToken <* sc) <* eof) "" (T.pack src)
+scan :: String -> LoxTokStream
+scan src = case parse (sc *> many (scanToken <* sc) <* eof) "" (T.pack src) of
+  Right ts -> LoxTokStream src ts
+  Left _ -> undefined -- assume no scan errors for now
 
 sc :: Parser ()
 sc = L.space space1 lineCmnt Text.Megaparsec.empty
   where
     lineCmnt = L.skipLineComment "//"
 
-scanToken :: Parser LoxTok
+scanToken :: Parser (WithPos LoxTok)
 scanToken =
   try $
-    scanCommentToken 1
-      <|> try (scanNumberToken 1)
-      <|> try (scanDoubleToken 1)
-      <|> try (scanSingleToken 1)
-      <|> try (scanStringToken 1)
-      <|> try (scanKeywordToken 1)
+    scanCommentToken
+      <|> try scanNumberToken
+      <|> try scanDoubleToken
+      <|> try scanSingleToken
+      <|> try scanStringToken
+      <|> try scanKeywordToken
 
-scanSingleToken :: Int -> Parser LoxTok
-scanSingleToken line =
+scanSingleToken :: Parser (WithPos LoxTok)
+scanSingleToken =
   choice
     [ makeToken LeftParen "(",
       makeToken RightParen ")",
@@ -58,11 +62,15 @@ scanSingleToken line =
       makeToken Less "<"
     ]
   where
-    makeToken :: TokenType -> String -> Parser LoxTok
-    makeToken tt str = LoxTok tt Nothing line <$ L.symbol space (T.pack str)
+    makeToken :: TokenType -> String -> Parser (WithPos LoxTok)
+    makeToken tt str = do
+      start <- getSourcePos
+      _ <- L.symbol space (T.pack str)
+      end <- getSourcePos
+      pure $ WithPos start end 1 (LoxTok tt (Just str))
 
-scanDoubleToken :: Int -> Parser LoxTok
-scanDoubleToken line =
+scanDoubleToken :: Parser (WithPos LoxTok)
+scanDoubleToken =
   choice
     [ makeToken BangEqual "!=",
       makeToken EqualEqual "==",
@@ -70,18 +78,27 @@ scanDoubleToken line =
       makeToken LessEqual "<="
     ]
   where
-    makeToken :: TokenType -> String -> Parser LoxTok
-    makeToken tt str = LoxTok tt Nothing line <$ L.symbol space (T.pack str)
+    makeToken :: TokenType -> String -> Parser (WithPos LoxTok)
+    makeToken tt str = do
+      start <- getSourcePos
+      _ <- L.symbol space (T.pack str)
+      end <- getSourcePos
+      pure $ WithPos start end 2 (LoxTok tt (Just str))
 
-scanStringToken :: Int -> Parser LoxTok
-scanStringToken line = do
+scanStringToken :: Parser (WithPos LoxTok)
+scanStringToken = do
+  start <- getSourcePos
   c <- char '\"' *> manyTill L.charLiteral (char '\"')
-  return $ LoxTok (StringLit c) Nothing line
+  end <- getSourcePos
+  pure $ WithPos start end (length c) (LoxTok (StringLit c) Nothing)
 
-scanNumberToken :: Int -> Parser LoxTok
-scanNumberToken line = do
+scanNumberToken :: Parser (WithPos LoxTok)
+scanNumberToken = do
+  start <- getSourcePos
   n <- try L.float <|> L.decimal
-  return $ LoxTok (Number n) Nothing line
+  end <- getSourcePos
+
+  return $ WithPos start end (length . show $ n) (LoxTok (Number n) Nothing)
 
 keywordMapping :: [(TokenType, String)]
 keywordMapping =
@@ -103,25 +120,38 @@ keywordMapping =
     (While, "while")
   ]
 
-scanIdentifierToken :: Int -> Parser LoxTok
-scanIdentifierToken line = do
+scanIdentifierToken :: Parser (WithPos LoxTok)
+scanIdentifierToken = do
+  start <- getSourcePos
   fc <- firstChar
   rest <- many otherChar
-  return $ LoxTok (Identifier (fc : rest)) Nothing line
+  end <- getSourcePos
+  let str = fc : rest
+  return $ WithPos start end (length str) (LoxTok (Identifier str) Nothing)
   where
     firstChar = satisfy (\a -> isLetter a || a == '_')
     otherChar = satisfy isLetter
 
-scanKeywordToken :: Int -> Parser LoxTok
-scanKeywordToken line = do
-  (LoxTok tt _ _) <- scanIdentifierToken 1
+scanKeywordToken :: Parser (WithPos LoxTok)
+scanKeywordToken = do
+  start <- getSourcePos
+  (WithPos _ _ _ (LoxTok tt _)) <- scanIdentifierToken
+  end <- getSourcePos
   case tt of
     Identifier ident -> do
       let xs = [(tt', a) | (tt', a) <- keywordMapping, a == ident]
       case xs of
-        ((tt'', _) : _) -> return $ LoxTok tt'' Nothing line
-        [] -> return $ LoxTok (Identifier ident) Nothing line
+        ((tt'', a') : _) -> return $ WithPos start end (length a') (LoxTok tt'' Nothing)
+        [] -> return $ WithPos start end (length ident) (LoxTok (Identifier ident) Nothing)
     _ -> fail "Expected Identifier"
 
-scanCommentToken :: Int -> Parser LoxTok
-scanCommentToken line = LoxTok (Comment "") Nothing line <$ L.skipLineComment "//"
+-- FIXME
+scanCommentToken :: Parser (WithPos LoxTok)
+scanCommentToken = do
+  start <- getSourcePos
+  startOffset <- getOffset
+  _ <- L.skipLineComment "//"
+  end <- getSourcePos
+  endOffset <- getOffset
+
+  return $ WithPos start end (endOffset - startOffset) (LoxTok (Comment "") Nothing)
