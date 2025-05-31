@@ -1,13 +1,13 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Scanner (Parser, scan, scan') where
+module Scanner (Parser, scan, scan', ScannerResult) where
 
 import Data.Char (isLetter)
 import Data.Functor.Identity
 import Data.Text hiding (length)
 import qualified Data.Text as T
 import Data.Void
-import Text.Megaparsec (ParseErrorBundle, ParsecT, SourcePos (SourcePos), choice, empty, eof, getOffset, getSourcePos, many, manyTill, parse, satisfy, try, (<|>))
+import Text.Megaparsec (ParseErrorBundle, ParsecT, SourcePos (SourcePos), choice, empty, eof, errorBundlePretty, getOffset, getSourcePos, many, manyTill, parse, satisfy, try, (<|>))
 import Text.Megaparsec.Char (char, space, space1)
 import qualified Text.Megaparsec.Char.Lexer as L
 import Token
@@ -17,15 +17,17 @@ type Parsec e s a = ParsecT e s Identity a
 
 type Parser a = Parsec Void Text a
 
+type ScannerResult = Either (ParseErrorBundle Text Void) LoxTokStream
+
 scan' :: String -> IO ()
 scan' src = case parse (sc *> many (scanToken <* sc) <* eof) "" (T.pack src) of
   Right ts -> print ts
-  Left err -> print err
+  Left err -> putStrLn $ errorBundlePretty err
 
-scan :: String -> LoxTokStream
+scan :: String -> ScannerResult
 scan src = case parse (sc *> many (scanToken <* sc) <* eof) "" (T.pack src) of
-  Right ts -> LoxTokStream src ts
-  Left _ -> undefined -- assume no scan errors for now
+  Right ts -> Right $ LoxTokStream src ts
+  Left err -> Left err -- assume no scan errors for now
 
 sc :: Parser ()
 sc = L.space space1 lineCmnt Text.Megaparsec.empty

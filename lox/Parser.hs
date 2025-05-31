@@ -4,9 +4,11 @@ import Data.Functor.Identity (Identity)
 import Data.List.NonEmpty (NonEmpty, nonEmpty)
 import Data.Maybe (fromJust)
 import qualified Data.Set as Set
+import Data.Text (Text)
 import Data.Void
 import Error.Diagnose.Report
 import Expr (Expr (Binary, Literal, Unary), LiteralValue (Boolean, Nil, Number, String))
+import Scanner (ScannerResult, scan)
 import Text.Megaparsec (ErrorItem (Label), MonadParsec (eof, lookAhead, withRecovery), ParseErrorBundle, ParsecT, anySingle, between, choice, errorBundlePretty, many, parse, registerParseError, skipManyTill, token, (<|>))
 import Token (LoxTok (LoxTok), LoxTokStream, WithPos (WithPos))
 import TokenType (TokenType (..))
@@ -15,28 +17,21 @@ type Parsec e s a = ParsecT e s Identity a
 
 type Parser a = Parsec Void LoxTokStream a
 
-type ParserResult = Either (ParseErrorBundle [LoxTok] Void) Expr
+type ParserResult = Either (Maybe (ParseErrorBundle LoxTokStream Void), Maybe (ParseErrorBundle Text Void)) Expr
 
-parse' :: LoxTokStream -> IO ()
-parse' src = case Text.Megaparsec.parse go "" src of
-  Right res -> print res
-  Left e -> putStrLn $ errorBundlePretty e
-  where
-    go = many (expression' <* semicolon') <* eof
-    expression' =
-      withRecovery
-        ( \e -> do
-            registerParseError e
-            skipManyTill anySingle (Literal Expr.Nil <$ lookAhead semicolon)
-        )
-        expression
-    semicolon' =
-      withRecovery
-        ( \e -> do
-            registerParseError e
-            skipManyTill anySingle semicolon
-        )
-        semicolon
+parse' :: String -> IO ()
+parse' src = case Scanner.scan src of
+  Right lexemes -> case Text.Megaparsec.parse (expression <* eof) "" lexemes of
+    Right tokens -> print tokens
+    Left pErrors -> putStrLn $ errorBundlePretty pErrors
+  Left sErrors -> putStrLn $ errorBundlePretty sErrors
+
+parse :: String -> ParserResult
+parse src = case Scanner.scan src of
+  Right lexemes -> case Text.Megaparsec.parse (expression <* eof) "" lexemes of
+    Right tokens -> Right tokens
+    Left pErrors -> Left (Just pErrors, Nothing)
+  Left sErrors -> Left (Nothing, Just sErrors)
 
 expression :: Parser Expr
 expression = equality
@@ -117,7 +112,7 @@ primary = do
 identifier :: Parser String
 identifier = token getIdent (Set.singleton (Label (fromJust $ nonEmpty "identifier")))
   where
-    getIdent (WithPos _ _ _ (LoxTok (Identifier ident) _)) = Just ident
+    getIdent wp@(WithPos _ _ _ (LoxTok (Identifier ident) _)) = Just ident
     getIdent _ = Nothing
 
 number :: Parser Double
@@ -132,106 +127,106 @@ string = token getString (Set.singleton (Label $ nonEmpty' "string"))
     getString (WithPos _ _ _ (LoxTok (StringLit str) _)) = Just str
     getString _ = Nothing
 
-bang :: Parser LoxTok
+bang :: Parser (WithPos LoxTok)
 bang = token getBang (Set.singleton (Label $ nonEmpty' "!"))
   where
-    getBang (WithPos _ _ _ (LoxTok Bang _)) = Just (LoxTok Bang Nothing)
+    getBang wp@(WithPos _ _ _ (LoxTok Bang _)) = Just wp
     getBang _ = Nothing
 
-minus :: Parser LoxTok
+minus :: Parser (WithPos LoxTok)
 minus = token getMinus (Set.singleton (Label $ nonEmpty' "-"))
   where
-    getMinus (WithPos _ _ _ (LoxTok Minus _)) = Just (LoxTok Minus Nothing)
+    getMinus wp@(WithPos _ _ _ (LoxTok Minus _)) = Just wp
     getMinus _ = Nothing
 
-bangEqual :: Parser LoxTok
+bangEqual :: Parser (WithPos LoxTok)
 bangEqual = token getBangEqual (Set.singleton (Label $ nonEmpty' "!="))
   where
-    getBangEqual (WithPos _ _ _ (LoxTok BangEqual _)) = Just (LoxTok BangEqual Nothing)
+    getBangEqual wp@(WithPos _ _ _ (LoxTok BangEqual _)) = Just wp
     getBangEqual _ = Nothing
 
-slash :: Parser LoxTok
+slash :: Parser (WithPos LoxTok)
 slash = token getSlash (Set.singleton (Label $ nonEmpty' "/"))
   where
-    getSlash (WithPos _ _ _ (LoxTok Slash _)) = Just (LoxTok Slash Nothing)
+    getSlash wp@(WithPos _ _ _ (LoxTok Slash _)) = Just wp
     getSlash _ = Nothing
 
-star :: Parser LoxTok
+star :: Parser (WithPos LoxTok)
 star = token getStar (Set.singleton (Label $ nonEmpty' "*"))
   where
-    getStar (WithPos _ _ _ (LoxTok Star _)) = Just (LoxTok Star Nothing)
+    getStar wp@(WithPos _ _ _ (LoxTok Star _)) = Just wp
     getStar _ = Nothing
 
-plus :: Parser LoxTok
+plus :: Parser (WithPos LoxTok)
 plus = token getPlus (Set.singleton (Label $ nonEmpty' "+"))
   where
-    getPlus (WithPos _ _ _ (LoxTok Plus _)) = Just (LoxTok Plus Nothing)
+    getPlus wp@(WithPos _ _ _ (LoxTok Plus _)) = Just wp
     getPlus _ = Nothing
 
-greater :: Parser LoxTok
+greater :: Parser (WithPos LoxTok)
 greater = token getGreater (Set.singleton (Label $ nonEmpty' ">"))
   where
-    getGreater (WithPos _ _ _ (LoxTok Greater _)) = Just (LoxTok Greater Nothing)
+    getGreater wp@(WithPos _ _ _ (LoxTok Greater _)) = Just wp
     getGreater _ = Nothing
 
-less :: Parser LoxTok
+less :: Parser (WithPos LoxTok)
 less = token getLess (Set.singleton (Label $ nonEmpty' "<"))
   where
-    getLess (WithPos _ _ _ (LoxTok Less _)) = Just (LoxTok Less Nothing)
+    getLess wp@(WithPos _ _ _ (LoxTok Less _)) = Just wp
     getLess _ = Nothing
 
-greaterEqual :: Parser LoxTok
+greaterEqual :: Parser (WithPos LoxTok)
 greaterEqual = token getGreaterEqual (Set.singleton (Label $ nonEmpty' ">="))
   where
-    getGreaterEqual (WithPos _ _ _ (LoxTok GreaterEqual _)) = Just (LoxTok GreaterEqual Nothing)
+    getGreaterEqual wp@(WithPos _ _ _ (LoxTok GreaterEqual _)) = Just wp
     getGreaterEqual _ = Nothing
 
-lessEqual :: Parser LoxTok
+lessEqual :: Parser (WithPos LoxTok)
 lessEqual = token getLessEqual (Set.singleton (Label $ nonEmpty' "<="))
   where
-    getLessEqual (WithPos _ _ _ (LoxTok LessEqual _)) = Just (LoxTok LessEqual Nothing)
+    getLessEqual wp@(WithPos _ _ _ (LoxTok LessEqual _)) = Just wp
     getLessEqual _ = Nothing
 
-equalEqual :: Parser LoxTok
+equalEqual :: Parser (WithPos LoxTok)
 equalEqual = token getEqualEqual (Set.singleton (Label $ nonEmpty' "=="))
   where
-    getEqualEqual (WithPos _ _ _ (LoxTok EqualEqual _)) = Just (LoxTok EqualEqual Nothing)
+    getEqualEqual wp@(WithPos _ _ _ (LoxTok EqualEqual _)) = Just wp
     getEqualEqual _ = Nothing
 
-true :: Parser LoxTok
+true :: Parser (WithPos LoxTok)
 true = token getTrue (Set.singleton (Label $ nonEmpty' "true"))
   where
-    getTrue (WithPos _ _ _ (LoxTok True_ _)) = Just (LoxTok True_ Nothing)
+    getTrue wp@(WithPos _ _ _ (LoxTok True_ _)) = Just wp
     getTrue _ = Nothing
 
-false :: Parser LoxTok
+false :: Parser (WithPos LoxTok)
 false = token getFalse (Set.singleton (Label $ nonEmpty' "false"))
   where
-    getFalse (WithPos _ _ _ (LoxTok False_ _)) = Just (LoxTok False_ Nothing)
+    getFalse wp@(WithPos _ _ _ (LoxTok False_ _)) = Just wp
     getFalse _ = Nothing
 
-rightParen :: Parser LoxTok
+rightParen :: Parser (WithPos LoxTok)
 rightParen = token getRightParen (Set.singleton (Label $ nonEmpty' ")"))
   where
-    getRightParen (WithPos _ _ _ (LoxTok RightParen _)) = Just (LoxTok RightParen Nothing)
+    getRightParen wp@(WithPos _ _ _ (LoxTok RightParen _)) = Just wp
     getRightParen _ = Nothing
 
-leftParen :: Parser LoxTok
+leftParen :: Parser (WithPos LoxTok)
 leftParen = token getLeftParen (Set.singleton (Label $ nonEmpty' "("))
   where
-    getLeftParen (WithPos _ _ _ (LoxTok LeftParen _)) = Just (LoxTok LeftParen Nothing)
+    getLeftParen wp@(WithPos _ _ _ (LoxTok LeftParen _)) = Just wp
     getLeftParen _ = Nothing
 
-nil :: Parser LoxTok
+nil :: Parser (WithPos LoxTok)
 nil = token getNil (Set.singleton (Label $ nonEmpty' "nil"))
   where
-    getNil (WithPos _ _ _ (LoxTok TokenType.Nil _)) = Just (LoxTok TokenType.Nil Nothing)
+    getNil wp@(WithPos _ _ _ (LoxTok TokenType.Nil _)) = Just wp
     getNil _ = Nothing
 
-semicolon :: Parser LoxTok
+semicolon :: Parser (WithPos LoxTok)
 semicolon = token getSemicolon (Set.singleton (Label $ nonEmpty' ";"))
   where
-    getSemicolon (WithPos _ _ _ (LoxTok Semicolon _)) = Just (LoxTok Semicolon Nothing)
+    getSemicolon wp@(WithPos _ _ _ (LoxTok Semicolon _)) = Just wp
     getSemicolon _ = Nothing
 
 nonEmpty' :: String -> NonEmpty Char

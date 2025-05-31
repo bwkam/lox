@@ -2,6 +2,7 @@
 {-# LANGUAGE InstanceSigs #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
 
 module Token where
@@ -26,7 +27,7 @@ data WithPos a = WithPos
     tokenLength :: Int,
     tokenVal :: a
   }
-  deriving (Eq, Ord, Show)
+  deriving (Eq, Ord)
 
 data LoxTokStream = LoxTokStream
   { streamInput :: String,
@@ -36,6 +37,9 @@ data LoxTokStream = LoxTokStream
 instance Show LoxTok where
   show :: LoxTok -> String
   show (LoxTok tt _) = show tt
+
+instance Show (WithPos LoxTok) where
+  show (WithPos _ _ _ x) = show x
 
 instance Stream LoxTokStream where
   type Token LoxTokStream = WithPos LoxTok

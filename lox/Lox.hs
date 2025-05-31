@@ -1,6 +1,8 @@
 module Lox where
 
 import qualified Data.ByteString as B
+import qualified Interpreter
+import System.Console.ANSI (clearScreen)
 import System.Environment (getArgs)
 import System.Exit (ExitCode (ExitFailure), exitWith)
 import System.IO (hFlush, hPutStrLn, stderr, stdout)
@@ -23,6 +25,7 @@ runPrompt = do
   hFlush stdout
   result <- tryIOError getLine
   case result of
+    Right "clear" -> clearScreen >> runPrompt
     Right l -> run l >> runPrompt
     Left _ -> putStrLn "Goodbye."
 
@@ -33,9 +36,7 @@ runFile c = do
   pure ()
 
 run :: String -> IO ()
-run c = do
-  -- scan
-  putStrLn $ "running: " <> c
+run = putStrLn . Interpreter.eval'
 
 error :: Int -> String -> IO ()
 error l = report l ""

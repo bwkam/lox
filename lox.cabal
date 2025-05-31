@@ -67,6 +67,7 @@ executable lox
                       Scanner
                       Expr
                       Parser
+                      Interpreter
 
     -- LANGUAGE extensions used by modules in this package.
     -- other-extensions:
@@ -78,6 +79,7 @@ executable lox
                       containers,
                       text, 
                       split,
+                      ansi-terminal,
                       diagnose ^>=2.5
 
     -- Directories containing source files.
