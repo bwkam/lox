@@ -51,13 +51,29 @@ varDecl = do
     Nothing -> pure $ Expr.Var ident Nothing
 
 statement :: Parser Expr
-statement = choice [exprStmt, printStmt]
+statement = choice [printStmt, exprStmt]
 
 exprStmt :: Parser Expr
-exprStmt = Expr.Expression <$> (expression <* semicolon)
+exprStmt = Expr.Expression <$> (expression' <* semicolon)
+  where
+    expression' =
+      withRecovery
+        ( \e -> do
+            registerParseError e
+            skipManyTill anySingle (Literal Expr.Nil <$ lookAhead semicolon)
+        )
+        expression
 
 printStmt :: Parser Expr
-printStmt = Expr.Print <$> (print_ *> expression <* semicolon)
+printStmt = Expr.Print <$> (print_ *> expression' <* semicolon)
+  where
+    expression' =
+      withRecovery
+        ( \e -> do
+            registerParseError e
+            skipManyTill anySingle (Literal Expr.Nil <$ lookAhead semicolon)
+        )
+        expression
 
 expression :: Parser Expr
 expression = equality
