@@ -6,3 +6,6 @@ an implementation of lox in haskell using megaparsec
 
 ## file
 `cabal run lox -- <filename.lox>`
+
+## bugs 
+- no multiple parse errors with var stmts
