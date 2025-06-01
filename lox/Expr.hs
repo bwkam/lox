@@ -9,6 +9,10 @@ data Expr
   | Grouping Expr
   | Literal LiteralValue
   | Unary (WithPos LoxTok) Expr
+  | Expression Expr
+  | Print Expr
+  | Var (WithPos LoxTok) (Maybe Expr)
+  | Variable (WithPos LoxTok)
 
 data LiteralValue = Number Double | String String | Boolean Bool | Nil
   deriving (Eq)
@@ -25,3 +29,11 @@ instance Show Expr where
   show (Literal v) = show v
   show (Grouping e) = "(group " <> show e <> ")"
   show (Unary t e) = "(" <> show t <> " " <> show e <> ")"
+  show (Expression e) = show e
+  show (Print e) = "(print " <> show e <> ")"
+  show (Var t e) = "(var " <> show t <> f <> ")"
+    where
+      f = case e of
+        Just e' -> " = " <> show e'
+        Nothing -> ""
+  show (Variable t) = "(var " <> show t

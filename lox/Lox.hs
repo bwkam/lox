@@ -36,7 +36,8 @@ runFile c = do
   pure ()
 
 run :: String -> IO ()
-run = putStrLn . Interpreter.eval'
+-- run = putStrLn . Interpreter.eval'
+run = undefined
 
 error :: Int -> String -> IO ()
 error l = report l ""

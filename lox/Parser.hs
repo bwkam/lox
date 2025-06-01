@@ -7,9 +7,9 @@ import qualified Data.Set as Set
 import Data.Text (Text)
 import Data.Void
 import Error.Diagnose.Report
-import Expr (Expr (Binary, Literal, Unary), LiteralValue (Boolean, Nil, Number, String))
+import Expr (Expr (Binary, Expression, Literal, Print, Unary, Var, Variable), LiteralValue (Boolean, Nil, Number, String))
 import Scanner (ScannerResult, scan)
-import Text.Megaparsec (ErrorItem (Label), MonadParsec (eof, lookAhead, withRecovery), ParseErrorBundle, ParsecT, anySingle, between, choice, errorBundlePretty, many, parse, registerParseError, skipManyTill, token, (<|>))
+import Text.Megaparsec (ErrorItem (Label), MonadParsec (eof, lookAhead, try, withRecovery), ParseErrorBundle, ParsecT, anySingle, between, choice, errorBundlePretty, many, optional, parse, registerParseError, satisfy, skipManyTill, token, (<|>))
 import Token (LoxTok (LoxTok), LoxTokStream, WithPos (WithPos))
 import TokenType (TokenType (..))
 
@@ -17,21 +17,47 @@ type Parsec e s a = ParsecT e s Identity a
 
 type Parser a = Parsec Void LoxTokStream a
 
-type ParserResult = Either (Maybe (ParseErrorBundle LoxTokStream Void), Maybe (ParseErrorBundle Text Void)) Expr
+type ParserResult = Either (Maybe (ParseErrorBundle LoxTokStream Void), Maybe (ParseErrorBundle Text Void)) [Expr]
 
 parse' :: String -> IO ()
 parse' src = case Scanner.scan src of
-  Right lexemes -> case Text.Megaparsec.parse (expression <* eof) "" lexemes of
+  Right lexemes -> case Text.Megaparsec.parse program "" lexemes of
     Right tokens -> print tokens
     Left pErrors -> putStrLn $ errorBundlePretty pErrors
   Left sErrors -> putStrLn $ errorBundlePretty sErrors
 
 parse :: String -> ParserResult
 parse src = case Scanner.scan src of
-  Right lexemes -> case Text.Megaparsec.parse (expression <* eof) "" lexemes of
+  Right lexemes -> case Text.Megaparsec.parse program "" lexemes of
     Right tokens -> Right tokens
     Left pErrors -> Left (Just pErrors, Nothing)
   Left sErrors -> Left (Nothing, Just sErrors)
+
+program :: Parser [Expr]
+program = many declaration <* eof
+
+declaration :: Parser Expr
+declaration = choice [varDecl, statement]
+
+varDecl :: Parser Expr
+varDecl = do
+  _ <- var
+  ident <- identifier
+  e <- optional (equal_ *> expression)
+  _ <- semicolon
+
+  case e of
+    Just e' -> pure $ Expr.Var ident (Just e')
+    Nothing -> pure $ Expr.Var ident Nothing
+
+statement :: Parser Expr
+statement = choice [exprStmt, printStmt]
+
+exprStmt :: Parser Expr
+exprStmt = Expr.Expression <$> (expression <* semicolon)
+
+printStmt :: Parser Expr
+printStmt = Expr.Print <$> (print_ *> expression <* semicolon)
 
 expression :: Parser Expr
 expression = equality
@@ -103,16 +129,17 @@ unary = do
 
 primary :: Parser Expr
 primary = do
-  parseBool <|> parseNumOrString <|> parseGrouping
+  parseBool <|> parseNumOrString <|> parseGrouping <|> parseIdent
   where
     parseBool = choice [Literal (Boolean True) <$ true, Literal (Boolean False) <$ false, Literal Expr.Nil <$ nil]
     parseNumOrString = choice [Literal . Expr.String <$> string, Literal . Expr.Number <$> number]
     parseGrouping = between leftParen rightParen expression
+    parseIdent = Variable <$> identifier
 
-identifier :: Parser String
+identifier :: Parser (WithPos LoxTok)
 identifier = token getIdent (Set.singleton (Label (fromJust $ nonEmpty "identifier")))
   where
-    getIdent wp@(WithPos _ _ _ (LoxTok (Identifier ident) _)) = Just ident
+    getIdent wp@(WithPos _ _ _ (LoxTok (Identifier _) _)) = Just wp
     getIdent _ = Nothing
 
 number :: Parser Double
@@ -193,6 +220,12 @@ equalEqual = token getEqualEqual (Set.singleton (Label $ nonEmpty' "=="))
     getEqualEqual wp@(WithPos _ _ _ (LoxTok EqualEqual _)) = Just wp
     getEqualEqual _ = Nothing
 
+equal_ :: Parser (WithPos LoxTok)
+equal_ = token getEqual (Set.singleton (Label $ nonEmpty' "="))
+  where
+    getEqual wp@(WithPos _ _ _ (LoxTok Equal _)) = Just wp
+    getEqual _ = Nothing
+
 true :: Parser (WithPos LoxTok)
 true = token getTrue (Set.singleton (Label $ nonEmpty' "true"))
   where
@@ -228,6 +261,18 @@ semicolon = token getSemicolon (Set.singleton (Label $ nonEmpty' ";"))
   where
     getSemicolon wp@(WithPos _ _ _ (LoxTok Semicolon _)) = Just wp
     getSemicolon _ = Nothing
+
+print_ :: Parser (WithPos LoxTok)
+print_ = token getPrint (Set.singleton (Label $ nonEmpty' "print"))
+  where
+    getPrint wp@(WithPos _ _ _ (LoxTok TokenType.Print _)) = Just wp
+    getPrint _ = Nothing
+
+var :: Parser (WithPos LoxTok)
+var = token getVar (Set.singleton (Label $ nonEmpty' "var"))
+  where
+    getVar wp@(WithPos _ _ _ (LoxTok TokenType.Var _)) = Just wp
+    getVar _ = Nothing
 
 nonEmpty' :: String -> NonEmpty Char
 nonEmpty' s = fromJust $ nonEmpty s

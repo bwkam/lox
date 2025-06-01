@@ -80,7 +80,8 @@ executable lox
                       text, 
                       split,
                       ansi-terminal,
-                      diagnose ^>=2.5
+                      diagnose ^>=2.5,
+                      mtl
 
     -- Directories containing source files.
     hs-source-dirs:   lox
