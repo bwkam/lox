@@ -6,7 +6,7 @@ module Interpreter (eval, eval') where
 import Control.Monad.Except (ExceptT, MonadError (catchError, throwError), runExceptT)
 import Control.Monad.State (MonadIO (liftIO), MonadState (get), StateT (runStateT), modify)
 import Data.Foldable (traverse_)
-import Expr (Expr (Binary, Expression, Grouping, Literal, Print, Unary, Var, Variable), LiteralValue (..))
+import Expr (Expr (Assign, Binary, Expression, Grouping, Literal, Print, Unary, Var, Variable), LiteralValue (..))
 import qualified Parser
 import Text.Megaparsec (errorBundlePretty)
 import Token (LoxTok (LoxTok, tokenType), WithPos (WithPos))
@@ -18,6 +18,8 @@ data Value = Nil | Boolean Bool | Number Double | String String deriving (Show)
 type Name = String
 
 type Env = [(Name, Value)]
+
+data Environment = Environment {values :: Env, parent :: Maybe Environment}
 
 type Result = ExceptT (WithPos LoxTok, String) (StateT Env IO)
 
@@ -98,6 +100,13 @@ eval (Expr.Variable wp@(WithPos _ _ _ (LoxTok (Identifier name) _))) = do
   env <- get
   case lookup name env of
     Just v -> pure v
+    Nothing -> throwError (wp, "undefined variable: " <> name)
+eval (Expr.Assign (Variable wp@(WithPos _ _ _ (LoxTok (Identifier name) _))) l) = do
+  v' <- eval l
+  env <- get
+
+  case lookup name env of
+    Just _ -> modify (filter (\(n, _) -> n /= name)) >> modify ((name, v') :) >> pure v'
     Nothing -> throwError (wp, "undefined variable: " <> name)
 eval _ = undefined
 

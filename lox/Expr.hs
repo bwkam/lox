@@ -13,6 +13,7 @@ data Expr
   | Print Expr
   | Var (WithPos LoxTok) (Maybe Expr)
   | Variable (WithPos LoxTok)
+  | Assign Expr Expr
 
 data LiteralValue = Number Double | String String | Boolean Bool | Nil
   deriving (Eq)
@@ -37,3 +38,4 @@ instance Show Expr where
         Just e' -> " = " <> show e'
         Nothing -> ""
   show (Variable t) = "(var " <> show t
+  show (Assign t e) = "(" <> show t <> " = " <> show e <> ")"

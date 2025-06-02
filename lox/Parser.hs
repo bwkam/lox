@@ -6,9 +6,8 @@ import Data.Maybe (fromJust)
 import qualified Data.Set as Set
 import Data.Text (Text)
 import Data.Void
-import Error.Diagnose.Report
-import Expr (Expr (Binary, Expression, Literal, Print, Unary, Var, Variable), LiteralValue (Boolean, Nil, Number, String))
-import Scanner (ScannerResult, scan)
+import Expr (Expr (Assign, Binary, Expression, Literal, Print, Unary, Var, Variable), LiteralValue (Boolean, Nil, Number, String))
+import Scanner (scan)
 import Text.Megaparsec (ErrorItem (Label), MonadParsec (eof, lookAhead, try, withRecovery), ParseErrorBundle, ParsecT, anySingle, between, choice, errorBundlePretty, many, optional, parse, registerParseError, satisfy, skipManyTill, token, (<|>))
 import Token (LoxTok (LoxTok), LoxTokStream, WithPos (WithPos))
 import TokenType (TokenType (..))
@@ -34,7 +33,15 @@ parse src = case Scanner.scan src of
   Left sErrors -> Left (Nothing, Just sErrors)
 
 program :: Parser [Expr]
-program = many declaration <* eof
+program = many (declaration' <* semicolon) <* eof
+  where
+    declaration' =
+      withRecovery
+        ( \e -> do
+            registerParseError e
+            skipManyTill anySingle (Literal Expr.Nil <$ lookAhead semicolon)
+        )
+        declaration
 
 declaration :: Parser Expr
 declaration = choice [varDecl, statement]
@@ -44,7 +51,7 @@ varDecl = do
   _ <- var
   ident <- identifier
   e <- optional (equal_ *> expression)
-  _ <- semicolon
+  -- _ <- semicolon
 
   case e of
     Just e' -> pure $ Expr.Var ident (Just e')
@@ -54,29 +61,28 @@ statement :: Parser Expr
 statement = choice [printStmt, exprStmt]
 
 exprStmt :: Parser Expr
-exprStmt = Expr.Expression <$> (expression' <* semicolon)
-  where
-    expression' =
-      withRecovery
-        ( \e -> do
-            registerParseError e
-            skipManyTill anySingle (Literal Expr.Nil <$ lookAhead semicolon)
-        )
-        expression
+exprStmt = Expr.Expression <$> expression
 
 printStmt :: Parser Expr
-printStmt = Expr.Print <$> (print_ *> expression' <* semicolon)
-  where
-    expression' =
-      withRecovery
-        ( \e -> do
-            registerParseError e
-            skipManyTill anySingle (Literal Expr.Nil <$ lookAhead semicolon)
-        )
-        expression
+printStmt = Expr.Print <$> (print_ *> expression)
 
 expression :: Parser Expr
-expression = equality
+expression = assignment
+
+assignment :: Parser Expr
+assignment = do
+  expr <- equality
+
+  go expr
+  where
+    parseOp expr = do
+      _ <- equal_
+      right <- assignment
+
+      go (Assign expr right)
+
+    go expr = do
+      parseOp expr <|> return expr
 
 equality :: Parser Expr
 equality = do
@@ -140,8 +146,7 @@ unary = do
   where
     go = do
       op <- choice [bang, minus]
-      right <- unary
-      return $ Unary op right
+      Unary op <$> unary
 
 primary :: Parser Expr
 primary = do
