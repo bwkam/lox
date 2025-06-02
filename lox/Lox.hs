@@ -1,6 +1,5 @@
 module Lox where
 
-import qualified Data.ByteString as B
 import qualified Interpreter
 import System.Console.ANSI (clearScreen)
 import System.Environment (getArgs)
@@ -31,9 +30,8 @@ runPrompt = do
 
 runFile :: FilePath -> IO ()
 runFile c = do
-  content <- B.readFile c
-  --   run $ toString content
-  pure ()
+  content <- readFile c
+  run content
 
 run :: String -> IO ()
 run = Interpreter.eval'

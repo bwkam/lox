@@ -6,7 +6,7 @@ import Data.Maybe (fromJust)
 import qualified Data.Set as Set
 import Data.Text (Text)
 import Data.Void
-import Expr (Expr (Assign, Binary, Expression, Literal, Print, Unary, Var, Variable), LiteralValue (Boolean, Nil, Number, String))
+import Expr (Expr (Assign, Binary, Block, Expression, Literal, Print, Unary, Var, Variable), LiteralValue (Boolean, Nil, Number, String))
 import Scanner (scan)
 import Text.Megaparsec (ErrorItem (Label), MonadParsec (eof, lookAhead, try, withRecovery), ParseErrorBundle, ParsecT, anySingle, between, choice, errorBundlePretty, many, optional, parse, registerParseError, satisfy, skipManyTill, token, (<|>))
 import Token (LoxTok (LoxTok), LoxTokStream, WithPos (WithPos))
@@ -32,16 +32,16 @@ parse src = case Scanner.scan src of
     Left pErrors -> Left (Just pErrors, Nothing)
   Left sErrors -> Left (Nothing, Just sErrors)
 
+addRecovery :: Parser Expr -> Parser Expr
+addRecovery =
+  withRecovery
+    ( \e -> do
+        registerParseError e
+        skipManyTill anySingle (Literal Expr.Nil <$ semicolon)
+    )
+
 program :: Parser [Expr]
-program = many (declaration' <* semicolon) <* eof
-  where
-    declaration' =
-      withRecovery
-        ( \e -> do
-            registerParseError e
-            skipManyTill anySingle (Literal Expr.Nil <$ lookAhead semicolon)
-        )
-        declaration
+program = many (addRecovery declaration) <* eof
 
 declaration :: Parser Expr
 declaration = choice [varDecl, statement]
@@ -51,20 +51,27 @@ varDecl = do
   _ <- var
   ident <- identifier
   e <- optional (equal_ *> expression)
-  -- _ <- semicolon
+  _ <- semicolon
 
   case e of
     Just e' -> pure $ Expr.Var ident (Just e')
     Nothing -> pure $ Expr.Var ident Nothing
 
 statement :: Parser Expr
-statement = choice [printStmt, exprStmt]
+statement = choice [printStmt, exprStmt, block]
+
+block :: Parser Expr
+block = do
+  _ <- leftBrace
+  expr <- many declaration
+  _ <- rightBrace
+  pure $ Expr.Block expr
 
 exprStmt :: Parser Expr
-exprStmt = Expr.Expression <$> expression
+exprStmt = Expr.Expression <$> expression <* semicolon
 
 printStmt :: Parser Expr
-printStmt = Expr.Print <$> (print_ *> expression)
+printStmt = Expr.Print <$> (print_ *> expression <* semicolon)
 
 expression :: Parser Expr
 expression = assignment
@@ -270,6 +277,18 @@ leftParen = token getLeftParen (Set.singleton (Label $ nonEmpty' "("))
   where
     getLeftParen wp@(WithPos _ _ _ (LoxTok LeftParen _)) = Just wp
     getLeftParen _ = Nothing
+
+rightBrace :: Parser (WithPos LoxTok)
+rightBrace = token getRightBrace (Set.singleton (Label $ nonEmpty' "}"))
+  where
+    getRightBrace wp@(WithPos _ _ _ (LoxTok RightBrace _)) = Just wp
+    getRightBrace _ = Nothing
+
+leftBrace :: Parser (WithPos LoxTok)
+leftBrace = token getLeftBrace (Set.singleton (Label $ nonEmpty' "{"))
+  where
+    getLeftBrace wp@(WithPos _ _ _ (LoxTok LeftBrace _)) = Just wp
+    getLeftBrace _ = Nothing
 
 nil :: Parser (WithPos LoxTok)
 nil = token getNil (Set.singleton (Label $ nonEmpty' "nil"))

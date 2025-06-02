@@ -14,6 +14,7 @@ data Expr
   | Var (WithPos LoxTok) (Maybe Expr)
   | Variable (WithPos LoxTok)
   | Assign Expr Expr
+  | Block [Expr]
 
 data LiteralValue = Number Double | String String | Boolean Bool | Nil
   deriving (Eq)

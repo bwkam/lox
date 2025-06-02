@@ -1,12 +1,13 @@
+{-# LANGUAGE RecordWildCards #-}
 {-# HLINT ignore "Use tuple-section" #-}
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
 module Interpreter (eval, eval') where
 
 import Control.Monad.Except (ExceptT, MonadError (catchError, throwError), runExceptT)
-import Control.Monad.State (MonadIO (liftIO), MonadState (get), StateT (runStateT), modify)
+import Control.Monad.State (MonadIO (liftIO), MonadState (get, put), StateT (runStateT), modify)
 import Data.Foldable (traverse_)
-import Expr (Expr (Assign, Binary, Expression, Grouping, Literal, Print, Unary, Var, Variable), LiteralValue (..))
+import Expr (Expr (Assign, Binary, Block, Expression, Grouping, Literal, Print, Unary, Var, Variable), LiteralValue (..))
 import qualified Parser
 import Text.Megaparsec (errorBundlePretty)
 import Token (LoxTok (LoxTok, tokenType), WithPos (WithPos))
@@ -21,7 +22,7 @@ type Env = [(Name, Value)]
 
 data Environment = Environment {values :: Env, parent :: Maybe Environment}
 
-type Result = ExceptT (WithPos LoxTok, String) (StateT Env IO)
+type Result = ExceptT (WithPos LoxTok, String) (StateT Environment IO)
 
 eval' :: String -> IO ()
 eval' src = do
@@ -30,17 +31,8 @@ eval' src = do
         Left (Nothing, sErrors) -> traverse_ (liftIO . print) sErrors
         Left (Just e, Nothing) -> liftIO $ putStrLn $ errorBundlePretty e
         Left (Just _, Just _) -> liftIO $ putStrLn "no way!!!!"
-  _ <- runStateT (runExceptT action) []
+  _ <- runStateT (runExceptT action) (Environment [] Nothing)
   pure ()
-
--- eval' :: String -> Result ()
--- eval' src = case Parser.parse src of
---   Right es -> mapM_ eval es `catchError` (liftIO . print)
---   Left es -> case es of
---     (Nothing, sErrors) -> for_ sErrors (liftIO . print)
---     (pErrors, Nothing) -> case pErrors of
---       Just e -> liftIO $ putStrLn $ errorBundlePretty e
---     (Just _, Just _) -> liftIO $ putStrLn "no way!!!!"
 
 eval :: Expr -> Result Value
 eval (Literal inner) = case inner of
@@ -90,25 +82,53 @@ eval (Expr.Var (WithPos _ _ _ (LoxTok (Identifier name) _)) e) = do
     Just e' -> do
       v <- eval e'
       let newVar = (name, v)
-      modify (newVar :)
+      modify (\(Environment {..}) -> Environment {values = newVar : values, ..})
       pure v
     Nothing -> do
       let newVar = (name, Interpreter.Nil)
-      modify (newVar :)
+      modify (\(Environment {..}) -> Environment {values = newVar : values, ..})
       pure Interpreter.Nil
 eval (Expr.Variable wp@(WithPos _ _ _ (LoxTok (Identifier name) _))) = do
   env <- get
-  case lookup name env of
+
+  case searchValue name env of
     Just v -> pure v
     Nothing -> throwError (wp, "undefined variable: " <> name)
 eval (Expr.Assign (Variable wp@(WithPos _ _ _ (LoxTok (Identifier name) _))) l) = do
   v' <- eval l
   env <- get
 
-  case lookup name env of
-    Just _ -> modify (filter (\(n, _) -> n /= name)) >> modify ((name, v') :) >> pure v'
+  case searchValue name env of
+    Just _ -> do
+      modify (\(Environment {..}) -> Environment {values = filter (\(n, _) -> n /= name) values, ..})
+      modify (\Environment {..} -> Environment {values = (name, v') : values, ..})
+      pure v'
     Nothing -> throwError (wp, "undefined variable: " <> name)
+eval (Expr.Block es) = do
+  oldEnv <- get
+  modify (\(Environment {..}) -> Environment {parent = Just (Environment [] Nothing), ..})
+  e <- last <$> traverse eval es
+  put oldEnv
+  pure e
 eval _ = undefined
+
+searchValue :: String -> Environment -> Maybe Value
+searchValue name env =
+  case filter snd (search name env) of
+    [] -> Nothing
+    xs ->
+      let (Environment vs _, _) = last xs
+       in lookup name vs
+
+search :: String -> Environment -> [(Environment, Bool)]
+search name e@(Environment vs (Just e')) =
+  case lookup name vs of
+    Just _ -> (e, True) : search name e'
+    Nothing -> (e, False) : search name e'
+search name e@(Environment vs Nothing) =
+  case lookup name vs of
+    Just _ -> [(e, True)]
+    Nothing -> [(e, False)]
 
 isEqual :: Expr -> Expr -> Bool
 isEqual (Literal Expr.Nil) (Literal Expr.Nil) = True
