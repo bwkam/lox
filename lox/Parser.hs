@@ -6,7 +6,7 @@ import Data.Maybe (fromJust)
 import qualified Data.Set as Set
 import Data.Text (Text)
 import Data.Void
-import Expr (Expr (Assign, Binary, Block, Expression, Literal, Print, Unary, Var, Variable), LiteralValue (Boolean, Nil, Number, String))
+import Expr (Expr (And, Assign, Binary, Block, Expression, If, Literal, Or, Print, Unary, Var, Variable), LiteralValue (Boolean, Nil, Number, String))
 import Scanner (scan)
 import Text.Megaparsec (ErrorItem (Label), MonadParsec (eof, lookAhead, try, withRecovery), ParseErrorBundle, ParsecT, anySingle, between, choice, errorBundlePretty, many, optional, parse, registerParseError, satisfy, skipManyTill, token, (<|>))
 import Token (LoxTok (LoxTok), LoxTokStream, WithPos (WithPos))
@@ -58,7 +58,7 @@ varDecl = do
     Nothing -> pure $ Expr.Var ident Nothing
 
 statement :: Parser Expr
-statement = choice [printStmt, exprStmt, block]
+statement = choice [printStmt, exprStmt, block, ifStmt]
 
 block :: Parser Expr
 block = do
@@ -67,8 +67,45 @@ block = do
   _ <- rightBrace
   pure $ Expr.Block expr
 
+logicOr :: Parser Expr
+logicOr = do
+  expr <- logicAnd
+
+  go expr
+  where
+    parseOp expr = do
+      _ <- or_
+      right <- logicAnd
+      go (Expr.Or expr right)
+
+    go expr = do
+      parseOp expr <|> return expr
+
+logicAnd :: Parser Expr
+logicAnd = do
+  expr <- equality
+
+  go expr
+  where
+    parseOp expr = do
+      _ <- and_
+      right <- equality
+      go (Expr.And expr right)
+
+    go expr = do
+      parseOp expr <|> return expr
+
 exprStmt :: Parser Expr
 exprStmt = Expr.Expression <$> expression <* semicolon
+
+ifStmt :: Parser Expr
+ifStmt = do
+  if_ >> leftParen
+  e <- expression
+  _ <- rightParen
+  s <- statement
+  e' <- optional (else_ >> statement)
+  pure $ Expr.If e s e'
 
 printStmt :: Parser Expr
 printStmt = Expr.Print <$> (print_ *> expression <* semicolon)
@@ -77,19 +114,21 @@ expression :: Parser Expr
 expression = assignment
 
 assignment :: Parser Expr
-assignment = do
-  expr <- equality
-
-  go expr
+assignment = choice [try f, try logicOr]
   where
-    parseOp expr = do
-      _ <- equal_
-      right <- assignment
+    f = do
+      expr <- equality
 
-      go (Assign expr right)
+      go expr
+      where
+        parseOp expr = do
+          _ <- equal_
+          right <- assignment
 
-    go expr = do
-      parseOp expr <|> return expr
+          go (Assign expr right)
+
+        go expr = do
+          parseOp expr <|> return expr
 
 equality :: Parser Expr
 equality = do
@@ -307,6 +346,30 @@ print_ = token getPrint (Set.singleton (Label $ nonEmpty' "print"))
   where
     getPrint wp@(WithPos _ _ _ (LoxTok TokenType.Print _)) = Just wp
     getPrint _ = Nothing
+
+if_ :: Parser (WithPos LoxTok)
+if_ = token getIf (Set.singleton (Label $ nonEmpty' "if"))
+  where
+    getIf wp@(WithPos _ _ _ (LoxTok TokenType.If _)) = Just wp
+    getIf _ = Nothing
+
+else_ :: Parser (WithPos LoxTok)
+else_ = token getElse (Set.singleton (Label $ nonEmpty' "else"))
+  where
+    getElse wp@(WithPos _ _ _ (LoxTok TokenType.Else _)) = Just wp
+    getElse _ = Nothing
+
+or_ :: Parser (WithPos LoxTok)
+or_ = token getOr (Set.singleton (Label $ nonEmpty' "or"))
+  where
+    getOr wp@(WithPos _ _ _ (LoxTok TokenType.Or _)) = Just wp
+    getOr _ = Nothing
+
+and_ :: Parser (WithPos LoxTok)
+and_ = token getAnd (Set.singleton (Label $ nonEmpty' "and"))
+  where
+    getAnd wp@(WithPos _ _ _ (LoxTok TokenType.And _)) = Just wp
+    getAnd _ = Nothing
 
 var :: Parser (WithPos LoxTok)
 var = token getVar (Set.singleton (Label $ nonEmpty' "var"))

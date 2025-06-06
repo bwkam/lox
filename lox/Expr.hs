@@ -11,9 +11,12 @@ data Expr
   | Unary (WithPos LoxTok) Expr
   | Expression Expr
   | Print Expr
+  | If Expr Expr (Maybe Expr)
   | Var (WithPos LoxTok) (Maybe Expr)
   | Variable (WithPos LoxTok)
   | Assign Expr Expr
+  | Or Expr Expr
+  | And Expr Expr
   | Block [Expr]
 
 data LiteralValue = Number Double | String String | Boolean Bool | Nil
@@ -40,3 +43,11 @@ instance Show Expr where
         Nothing -> ""
   show (Variable t) = "(var " <> show t
   show (Assign t e) = "(" <> show t <> " = " <> show e <> ")"
+  show (Block es) = show es
+  show (If c e e') = "(if (" <> show c <> ") then (" <> show e <> ") " <> f
+    where
+      f = case e' of
+        Just x -> "else (" <> show x <> ")"
+        Nothing -> ""
+  show (Or e1 e2) = "(or " <> show e1 <> " " <> show e2 <> ")"
+  show (And e1 e2) = "(and " <> show e1 <> " " <> show e2 <> ")"

@@ -7,7 +7,7 @@ module Interpreter (eval, eval') where
 import Control.Monad.Except (ExceptT, MonadError (catchError, throwError), runExceptT)
 import Control.Monad.State (MonadIO (liftIO), MonadState (get, put), StateT (runStateT), modify)
 import Data.Foldable (traverse_)
-import Expr (Expr (Assign, Binary, Block, Expression, Grouping, Literal, Print, Unary, Var, Variable), LiteralValue (..))
+import Expr (Expr (Assign, Binary, Block, Expression, Grouping, If, Literal, Print, Unary, Var, Variable), LiteralValue (..))
 import qualified Parser
 import Text.Megaparsec (errorBundlePretty)
 import Token (LoxTok (LoxTok, tokenType), WithPos (WithPos))
@@ -43,7 +43,7 @@ eval (Literal inner) = case inner of
 eval (Grouping expr) = eval expr
 eval (Unary wp@(WithPos _ _ _ (LoxTok tt _)) expr) = case (tt, expr) of
   (Minus, Literal (Expr.Number n)) -> pure $ Interpreter.Number $ -n
-  (Bang, e) -> pure $ Interpreter.Boolean $ not $ isTruthy e
+  (Bang, e) -> eval e >>= ((pure . Interpreter.Boolean) . not . isTruthy)
   (_, _) -> throwError (wp, "wrong operands for " ++ show tt)
 eval (Binary e1 wp@(WithPos _ _ _ t) e2) = do
   v1 <- eval e1
@@ -110,6 +110,14 @@ eval (Expr.Block es) = do
   e <- last <$> traverse eval es
   put oldEnv
   pure e
+eval (Expr.If c e e') = do
+  c' <- eval c
+
+  if isTruthy c'
+    then eval e
+    else case e' of
+      Just e'' -> eval e''
+      Nothing -> pure Interpreter.Nil
 eval _ = undefined
 
 searchValue :: String -> Environment -> Maybe Value
@@ -138,7 +146,7 @@ isEqual (Literal (Expr.String s1)) (Literal (Expr.String s2)) = s1 == s2
 isEqual (Literal (Expr.Number n1)) (Literal (Expr.Number n2)) = n1 == n2
 isEqual _ _ = False
 
-isTruthy :: Expr -> Bool
-isTruthy (Literal Expr.Nil) = False
-isTruthy (Literal (Expr.Boolean False)) = False
+isTruthy :: Value -> Bool
+isTruthy Interpreter.Nil = False
+isTruthy (Interpreter.Boolean False) = False
 isTruthy _ = True
