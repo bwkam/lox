@@ -58,7 +58,7 @@ varDecl = do
     Nothing -> pure $ Expr.Var ident Nothing
 
 statement :: Parser Expr
-statement = choice [printStmt, exprStmt, whileStmt, block, ifStmt]
+statement = choice [printStmt, exprStmt, forStmt, whileStmt, block, ifStmt]
 
 whileStmt :: Parser Expr
 whileStmt = do
@@ -66,6 +66,49 @@ whileStmt = do
   c <- expression
   _ <- rightParen
   Expr.While c <$> statement
+
+forStmt :: Parser Expr
+forStmt = do
+  for >> leftParen
+  init <- pInit
+  cond <- pCond
+  inc <- pInc
+
+  body' <-
+    statement
+      >>= ( \b -> case inc of
+              Just i -> pure $ Expr.Block [b, i]
+              Nothing -> pure b
+          )
+
+  cond' <-
+    case cond of
+      Just c -> pure c
+      Nothing -> pure $ Expr.Literal (Boolean True)
+
+  let whileExpr = case init of
+        Just i -> Expr.Block [i, Expr.While cond' body']
+        Nothing -> Expr.While cond' body'
+
+  pure whileExpr
+  where
+    pInit =
+      do
+        semicolon >> pure Nothing
+        <|> Just
+        <$> varDecl
+          <|> (Just <$> exprStmt)
+    pCond =
+      do
+        semicolon >> pure Nothing
+        <|> (expression >>= (\e -> semicolon >> pure (Just e)))
+    pInc =
+      do
+        rightParen >> pure Nothing
+        <|> do
+          e <- expression
+          _ <- rightParen
+          pure (Just e)
 
 block :: Parser Expr
 block = do
@@ -389,6 +432,12 @@ while = token getWhile (Set.singleton (Label $ nonEmpty' "while"))
   where
     getWhile wp@(WithPos _ _ _ (LoxTok TokenType.While _)) = Just wp
     getWhile _ = Nothing
+
+for :: Parser (WithPos LoxTok)
+for = token getFor (Set.singleton (Label $ nonEmpty' "for"))
+  where
+    getFor wp@(WithPos _ _ _ (LoxTok TokenType.For _)) = Just wp
+    getFor _ = Nothing
 
 nonEmpty' :: String -> NonEmpty Char
 nonEmpty' s = fromJust $ nonEmpty s

@@ -106,7 +106,7 @@ eval (Expr.Assign (Variable wp@(WithPos _ _ _ (LoxTok (Identifier name) _))) r) 
 
   case assignValue name v' env of
     Just e' -> do
-      env' <- put e' >> get
+      put e'
       pure v'
     Nothing -> throwError (wp, "undefined variable: " <> name)
 eval (Expr.Block es) = do
