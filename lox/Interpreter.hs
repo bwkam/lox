@@ -7,20 +7,21 @@ module Interpreter (eval, eval') where
 import Control.Monad.Except (ExceptT, MonadError (catchError, throwError), runExceptT)
 import Control.Monad.State (MonadIO (liftIO), MonadState (get, put), StateT (runStateT), modify)
 import Data.Foldable (traverse_)
-import Expr (Expr (Assign, Binary, Block, Expression, Grouping, If, Literal, Print, Unary, Var, Variable), LiteralValue (..))
+import Expr (Expr (And, Assign, Binary, Block, Expression, Grouping, If, Literal, Or, Print, Unary, Var, Variable, While), LiteralValue (..))
+import GHC.Base (error)
 import qualified Parser
 import Text.Megaparsec (errorBundlePretty)
 import Token (LoxTok (LoxTok, tokenType), WithPos (WithPos))
 import TokenType (TokenType (Bang, BangEqual, EqualEqual, Greater, GreaterEqual, Identifier, Less, LessEqual, Minus, Plus, Slash, Star))
 import Prelude hiding (error)
 
-data Value = Nil | Boolean Bool | Number Double | String String deriving (Show)
+data Value = Nil | Void | Boolean Bool | Number Double | String String deriving (Show)
 
 type Name = String
 
-type Env = [(Name, Value)]
+type Env = [(String, Value)]
 
-data Environment = Environment {values :: Env, parent :: Maybe Environment}
+data Environment = Environment {values :: Env, parent :: Maybe Environment} deriving (Show)
 
 type Result = ExceptT (WithPos LoxTok, String) (StateT Environment IO)
 
@@ -71,6 +72,9 @@ eval (Expr.Print e) = do
     Interpreter.Nil -> do
       liftIO $ putStrLn "nil"
       pure Interpreter.Nil
+    Interpreter.Void -> do
+      liftIO $ putStrLn "void"
+      pure Interpreter.Void
     (Interpreter.String s) -> do
       liftIO $ print s
       pure $ Interpreter.String s
@@ -83,6 +87,8 @@ eval (Expr.Var (WithPos _ _ _ (LoxTok (Identifier name) _)) e) = do
       v <- eval e'
       let newVar = (name, v)
       modify (\(Environment {..}) -> Environment {values = newVar : values, ..})
+      env <- get
+      liftIO $ print env
       pure v
     Nothing -> do
       let newVar = (name, Interpreter.Nil)
@@ -91,24 +97,29 @@ eval (Expr.Var (WithPos _ _ _ (LoxTok (Identifier name) _)) e) = do
 eval (Expr.Variable wp@(WithPos _ _ _ (LoxTok (Identifier name) _))) = do
   env <- get
 
-  case searchValue name env of
+  case lookup name (concat $ allValues env) of
     Just v -> pure v
     Nothing -> throwError (wp, "undefined variable: " <> name)
-eval (Expr.Assign (Variable wp@(WithPos _ _ _ (LoxTok (Identifier name) _))) l) = do
-  v' <- eval l
+eval (Expr.Assign (Variable wp@(WithPos _ _ _ (LoxTok (Identifier name) _))) r) = do
+  v' <- eval r
   env <- get
 
-  case searchValue name env of
-    Just _ -> do
-      modify (\(Environment {..}) -> Environment {values = filter (\(n, _) -> n /= name) values, ..})
-      modify (\Environment {..} -> Environment {values = (name, v') : values, ..})
+  case assignValue name v' env of
+    Just e' -> do
+      env' <- put e' >> get
       pure v'
     Nothing -> throwError (wp, "undefined variable: " <> name)
 eval (Expr.Block es) = do
   oldEnv <- get
-  modify (\(Environment {..}) -> Environment {parent = Just (Environment [] Nothing), ..})
+  -- parent should be old env
+  modify (\(Environment {..}) -> Environment {parent = Just oldEnv, values = []})
   e <- last <$> traverse eval es
-  put oldEnv
+
+  newEnv <- get
+  -- return the oldEnv that the inner block modified
+  case parent newEnv of
+    Just p -> put p
+    Nothing -> error "all blocks have parents"
   pure e
 eval (Expr.If c e e') = do
   c' <- eval c
@@ -118,6 +129,22 @@ eval (Expr.If c e e') = do
     else case e' of
       Just e'' -> eval e''
       Nothing -> pure Interpreter.Nil
+eval (Expr.Or e1 e2) = do
+  left <- eval e1
+  if isTruthy left
+    then pure left
+    else eval e2
+eval (Expr.And e1 e2) = do
+  left <- eval e1
+  if not $ isTruthy left
+    then pure left
+    else eval e2
+eval (Expr.While c e) = do
+  t <- eval c
+  go $ isTruthy t
+  where
+    go False = pure Interpreter.Void
+    go True = eval e >> (eval c >>= (go . isTruthy))
 eval _ = undefined
 
 searchValue :: String -> Environment -> Maybe Value
@@ -137,6 +164,20 @@ search name e@(Environment vs Nothing) =
   case lookup name vs of
     Just _ -> [(e, True)]
     Nothing -> [(e, False)]
+
+assignValue :: String -> Value -> Environment -> Maybe Environment
+assignValue s v c@(Environment vs (Just e)) =
+  case lookup s vs of
+    Just _ -> Just $ Environment {values = (s, v) : filter (\(n, _) -> n /= s) vs, parent = Just e}
+    Nothing -> Just $ Environment vs (assignValue s v e)
+assignValue s v e@(Environment vs Nothing) =
+  case lookup s vs of
+    Just _ -> Just $ Environment {values = (s, v) : filter (\(n, _) -> n /= s) vs, parent = Nothing}
+    Nothing -> Just e
+
+allValues :: Environment -> [Env]
+allValues (Environment vs (Just e)) = vs : allValues e
+allValues (Environment vs Nothing) = [vs]
 
 isEqual :: Expr -> Expr -> Bool
 isEqual (Literal Expr.Nil) (Literal Expr.Nil) = True

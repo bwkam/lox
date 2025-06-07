@@ -6,7 +6,7 @@ import Data.Maybe (fromJust)
 import qualified Data.Set as Set
 import Data.Text (Text)
 import Data.Void
-import Expr (Expr (And, Assign, Binary, Block, Expression, If, Literal, Or, Print, Unary, Var, Variable), LiteralValue (Boolean, Nil, Number, String))
+import Expr (Expr (And, Assign, Binary, Block, Expression, If, Literal, Or, Print, Unary, Var, Variable, While), LiteralValue (Boolean, Nil, Number, String))
 import Scanner (scan)
 import Text.Megaparsec (ErrorItem (Label), MonadParsec (eof, lookAhead, try, withRecovery), ParseErrorBundle, ParsecT, anySingle, between, choice, errorBundlePretty, many, optional, parse, registerParseError, satisfy, skipManyTill, token, (<|>))
 import Token (LoxTok (LoxTok), LoxTokStream, WithPos (WithPos))
@@ -58,7 +58,14 @@ varDecl = do
     Nothing -> pure $ Expr.Var ident Nothing
 
 statement :: Parser Expr
-statement = choice [printStmt, exprStmt, block, ifStmt]
+statement = choice [printStmt, exprStmt, whileStmt, block, ifStmt]
+
+whileStmt :: Parser Expr
+whileStmt = do
+  while >> leftParen
+  c <- expression
+  _ <- rightParen
+  Expr.While c <$> statement
 
 block :: Parser Expr
 block = do
@@ -118,11 +125,11 @@ assignment = choice [try f, try logicOr]
   where
     f = do
       expr <- equality
+      _ <- equal_
 
       go expr
       where
         parseOp expr = do
-          _ <- equal_
           right <- assignment
 
           go (Assign expr right)
@@ -376,6 +383,12 @@ var = token getVar (Set.singleton (Label $ nonEmpty' "var"))
   where
     getVar wp@(WithPos _ _ _ (LoxTok TokenType.Var _)) = Just wp
     getVar _ = Nothing
+
+while :: Parser (WithPos LoxTok)
+while = token getWhile (Set.singleton (Label $ nonEmpty' "while"))
+  where
+    getWhile wp@(WithPos _ _ _ (LoxTok TokenType.While _)) = Just wp
+    getWhile _ = Nothing
 
 nonEmpty' :: String -> NonEmpty Char
 nonEmpty' s = fromJust $ nonEmpty s

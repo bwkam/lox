@@ -16,6 +16,7 @@ data Expr
   | Variable (WithPos LoxTok)
   | Assign Expr Expr
   | Or Expr Expr
+  | While Expr Expr
   | And Expr Expr
   | Block [Expr]
 
@@ -47,7 +48,8 @@ instance Show Expr where
   show (If c e e') = "(if (" <> show c <> ") then (" <> show e <> ") " <> f
     where
       f = case e' of
-        Just x -> "else (" <> show x <> ")"
+        Just x -> "(else (" <> show x <> "))"
         Nothing -> ""
   show (Or e1 e2) = "(or " <> show e1 <> " " <> show e2 <> ")"
   show (And e1 e2) = "(and " <> show e1 <> " " <> show e2 <> ")"
+  show (While e1 e2) = "(while (" <> show e1 <> ") (" <> show e2 <> ")"

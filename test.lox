@@ -1,8 +1,5 @@
-var a = 2; 
-var b = 10;
-
-if (a + b > 20) {
-  print "big number";
-} else {
-  print "small number";
+var i = 0;
+while (i < 10) {
+  print i;
+  i = i + 1;
 }
