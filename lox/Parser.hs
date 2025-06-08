@@ -6,7 +6,7 @@ import Data.Maybe (fromJust)
 import qualified Data.Set as Set
 import Data.Text (Text)
 import Data.Void
-import Expr (Expr (And, Assign, Binary, Block, Expression, If, Literal, Or, Print, Unary, Var, Variable, While), LiteralValue (Boolean, Nil, Number, String))
+import Expr (Expr (And, Assign, Binary, Block, Call, Expression, Function, If, Literal, Or, Print, Unary, Var, Variable, While), LiteralValue (Boolean, Nil, Number, String))
 import Scanner (scan)
 import Text.Megaparsec (ErrorItem (Label), MonadParsec (eof, lookAhead, try, withRecovery), ParseErrorBundle, ParsecT, anySingle, between, choice, errorBundlePretty, many, optional, parse, registerParseError, satisfy, skipManyTill, token, (<|>))
 import Token (LoxTok (LoxTok), LoxTokStream, WithPos (WithPos))
@@ -44,7 +44,20 @@ program :: Parser [Expr]
 program = many (addRecovery declaration) <* eof
 
 declaration :: Parser Expr
-declaration = choice [varDecl, statement]
+declaration = choice [funDecl, varDecl, statement]
+
+funDecl :: Parser Expr
+funDecl = do
+  _ <- fun
+  function
+
+function :: Parser Expr
+function = do
+  name <- identifier
+  _ <- leftParen
+  p <- parameters
+  _ <- rightParen
+  Expr.Function name p <$> block
 
 varDecl :: Parser Expr
 varDecl = do
@@ -238,11 +251,49 @@ factor = do
 
 unary :: Parser Expr
 unary = do
-  go <|> primary
+  go <|> call
   where
     go = do
       op <- choice [bang, minus]
       Unary op <$> unary
+
+call :: Parser Expr
+call = do
+  expr <- primary
+  go expr
+  where
+    parseCall expr = do
+      l <- leftParen
+      es <- arguments
+      _ <- rightParen
+
+      go (Expr.Call expr l es)
+
+    go expr = parseCall expr <|> return expr
+
+arguments :: Parser [Expr]
+arguments = do
+  expr <- expression
+  go [expr]
+  where
+    parseMore es = do
+      _ <- comma
+      r <- expression
+      go $ es <> [r]
+
+    go es = parseMore es <|> return es
+
+parameters :: Parser [WithPos LoxTok]
+parameters = do
+  name <- identifier
+  go [name]
+  where
+    parseMore es = do
+      _ <- comma
+      r <- identifier
+      go $ es <> [r]
+
+    go es = parseMore es <|> return es
 
 primary :: Parser Expr
 primary = do
@@ -427,6 +478,12 @@ var = token getVar (Set.singleton (Label $ nonEmpty' "var"))
     getVar wp@(WithPos _ _ _ (LoxTok TokenType.Var _)) = Just wp
     getVar _ = Nothing
 
+fun :: Parser (WithPos LoxTok)
+fun = token getFun (Set.singleton (Label $ nonEmpty' "fun"))
+  where
+    getFun wp@(WithPos _ _ _ (LoxTok TokenType.Fun _)) = Just wp
+    getFun _ = Nothing
+
 while :: Parser (WithPos LoxTok)
 while = token getWhile (Set.singleton (Label $ nonEmpty' "while"))
   where
@@ -438,6 +495,12 @@ for = token getFor (Set.singleton (Label $ nonEmpty' "for"))
   where
     getFor wp@(WithPos _ _ _ (LoxTok TokenType.For _)) = Just wp
     getFor _ = Nothing
+
+comma :: Parser (WithPos LoxTok)
+comma = token getComma (Set.singleton (Label $ nonEmpty' "comma"))
+  where
+    getComma wp@(WithPos _ _ _ (LoxTok TokenType.Comma _)) = Just wp
+    getComma _ = Nothing
 
 nonEmpty' :: String -> NonEmpty Char
 nonEmpty' s = fromJust $ nonEmpty s

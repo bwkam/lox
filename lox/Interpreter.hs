@@ -4,10 +4,11 @@
 
 module Interpreter (eval, eval') where
 
+import Control.Monad (zipWithM)
 import Control.Monad.Except (ExceptT, MonadError (catchError, throwError), runExceptT)
 import Control.Monad.State (MonadIO (liftIO), MonadState (get, put), StateT (runStateT), modify)
 import Data.Foldable (traverse_)
-import Expr (Expr (And, Assign, Binary, Block, Expression, Grouping, If, Literal, Or, Print, Unary, Var, Variable, While), LiteralValue (..))
+import Expr (Expr (And, Assign, Binary, Block, Call, Expression, Function, Grouping, If, Literal, Or, Print, Unary, Var, Variable, While), LiteralValue (..))
 import GHC.Base (error)
 import qualified Parser
 import Text.Megaparsec (errorBundlePretty)
@@ -15,13 +16,18 @@ import Token (LoxTok (LoxTok, tokenType), WithPos (WithPos))
 import TokenType (TokenType (Bang, BangEqual, EqualEqual, Greater, GreaterEqual, Identifier, Less, LessEqual, Minus, Plus, Slash, Star))
 import Prelude hiding (error)
 
-data Value = Nil | Void | Boolean Bool | Number Double | String String deriving (Show)
-
-type Name = String
+data Value
+  = Nil
+  | Void
+  | Boolean Bool
+  | Number Double
+  | String String
+  | LoxFunction Expr
+  deriving (Show)
 
 type Env = [(String, Value)]
 
-data Environment = Environment {values :: Env, parent :: Maybe Environment} deriving (Show)
+data Environment = Environment {values :: Env, parent :: Maybe Environment, globals :: Env} deriving (Show)
 
 type Result = ExceptT (WithPos LoxTok, String) (StateT Environment IO)
 
@@ -32,7 +38,7 @@ eval' src = do
         Left (Nothing, sErrors) -> traverse_ (liftIO . print) sErrors
         Left (Just e, Nothing) -> liftIO $ putStrLn $ errorBundlePretty e
         Left (Just _, Just _) -> liftIO $ putStrLn "no way!!!!"
-  _ <- runStateT (runExceptT action) (Environment [] Nothing)
+  _ <- runStateT (runExceptT action) (Environment [] Nothing [])
   pure ()
 
 eval :: Expr -> Result Value
@@ -81,6 +87,9 @@ eval (Expr.Print e) = do
     (Interpreter.Boolean b) -> do
       liftIO $ print b
       pure $ Interpreter.Boolean b
+    (Interpreter.LoxFunction f) -> do
+      liftIO $ putStrLn "some function"
+      pure $ Interpreter.LoxFunction f
 eval (Expr.Var (WithPos _ _ _ (LoxTok (Identifier name) _)) e) = do
   case e of
     Just e' -> do
@@ -112,7 +121,7 @@ eval (Expr.Assign (Variable wp@(WithPos _ _ _ (LoxTok (Identifier name) _))) r) 
 eval (Expr.Block es) = do
   oldEnv <- get
   -- parent should be old env
-  modify (\(Environment {..}) -> Environment {parent = Just oldEnv, values = []})
+  modify (\(Environment {..}) -> Environment {parent = Just oldEnv, values = [], globals = globals})
   e <- last <$> traverse eval es
 
   newEnv <- get
@@ -145,39 +154,70 @@ eval (Expr.While c e) = do
   where
     go False = pure Interpreter.Void
     go True = eval e >> (eval c >>= (go . isTruthy))
+eval (Expr.Call callable parens as) = do
+  (Environment vs _ _) <- get
+  _ <- case callable of
+    Variable (WithPos _ _ _ (LoxTok (TokenType.Identifier n) _)) ->
+      case lookup n vs of
+        Just v ->
+          case v of
+            -- when the callable is a function
+            LoxFunction (Function _ ps es) -> do
+              if length ps /= length as
+                then error "ps and as don't match"
+                else
+                  ( do
+                      let env = Environment {}
+                      undefined
+                  )
+            _ -> error "unexpected"
+        Nothing -> error "function isn't defined"
+    _ -> error "function isn't a variable"
+  undefined
+  where
+    -- args -> params
+    populate :: [WithPos LoxTok] -> [Expr] -> Result ()
+    populate as' ps =
+      do
+        vars <-
+          zipWithM
+            ( \a e ->
+                case a of
+                  (WithPos _ _ _ (LoxTok (TokenType.Identifier n) _)) ->
+                    do
+                      e' <- eval e
+                      pure (n, e')
+                  _ -> error "expected an identifier"
+            )
+            as'
+            ps
+        mapM_
+          ( \p ->
+              modify (\Environment {..} -> Environment {values = p : values, parent = parent, globals = globals})
+          )
+          vars
+eval f@(Expr.Function (WithPos _ _ _ (LoxTok (TokenType.Identifier n) _)) _ _) = do
+  let fun = LoxFunction f
+  modify
+    ( \Environment {..} ->
+        Environment {values = (n, fun) : values, parent = parent, globals = globals}
+    )
+  pure Interpreter.Nil
 eval _ = undefined
 
-searchValue :: String -> Environment -> Maybe Value
-searchValue name env =
-  case filter snd (search name env) of
-    [] -> Nothing
-    xs ->
-      let (Environment vs _, _) = last xs
-       in lookup name vs
-
-search :: String -> Environment -> [(Environment, Bool)]
-search name e@(Environment vs (Just e')) =
-  case lookup name vs of
-    Just _ -> (e, True) : search name e'
-    Nothing -> (e, False) : search name e'
-search name e@(Environment vs Nothing) =
-  case lookup name vs of
-    Just _ -> [(e, True)]
-    Nothing -> [(e, False)]
-
 assignValue :: String -> Value -> Environment -> Maybe Environment
-assignValue s v c@(Environment vs (Just e)) =
+assignValue s v (Environment vs (Just e) g) =
   case lookup s vs of
-    Just _ -> Just $ Environment {values = (s, v) : filter (\(n, _) -> n /= s) vs, parent = Just e}
-    Nothing -> Just $ Environment vs (assignValue s v e)
-assignValue s v e@(Environment vs Nothing) =
+    Just _ -> Just $ Environment {values = (s, v) : filter (\(n, _) -> n /= s) vs, parent = Just e, globals = g}
+    Nothing -> Just $ Environment vs (assignValue s v e) g
+assignValue s v e@(Environment vs Nothing g) =
   case lookup s vs of
-    Just _ -> Just $ Environment {values = (s, v) : filter (\(n, _) -> n /= s) vs, parent = Nothing}
+    Just _ -> Just $ Environment {values = (s, v) : filter (\(n, _) -> n /= s) vs, parent = Nothing, globals = g}
     Nothing -> Just e
 
 allValues :: Environment -> [Env]
-allValues (Environment vs (Just e)) = vs : allValues e
-allValues (Environment vs Nothing) = [vs]
+allValues (Environment vs (Just e) _) = vs : allValues e
+allValues (Environment vs Nothing _) = [vs]
 
 isEqual :: Expr -> Expr -> Bool
 isEqual (Literal Expr.Nil) (Literal Expr.Nil) = True
