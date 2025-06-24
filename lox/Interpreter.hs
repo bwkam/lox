@@ -24,7 +24,7 @@ data Value
   | Boolean Bool
   | Number Double
   | String String
-  | LoxFunction Expr
+  | LoxFunction Expr Environment
   deriving (Show)
 
 data Exception = Error (WithPos LoxTok, String) | ReturnException Value deriving (Show)
@@ -78,22 +78,22 @@ eval (Expr.Print e) = do
   case e' of
     (Interpreter.Number n) -> do
       liftIO $ print n
-      pure $ Interpreter.Number n
+      pure Interpreter.Nil
     Interpreter.Nil -> do
       liftIO $ putStrLn "nil"
       pure Interpreter.Nil
     Interpreter.Void -> do
       liftIO $ putStrLn "void"
-      pure Interpreter.Void
+      pure Interpreter.Nil
     (Interpreter.String s) -> do
       liftIO $ print s
-      pure $ Interpreter.String s
+      pure Interpreter.Nil
     (Interpreter.Boolean b) -> do
       liftIO $ print b
-      pure $ Interpreter.Boolean b
-    (Interpreter.LoxFunction f) -> do
+      pure Interpreter.Nil
+    (Interpreter.LoxFunction f _) -> do
       liftIO $ putStrLn "some function"
-      pure $ Interpreter.LoxFunction f
+      pure Interpreter.Nil
 eval (Expr.Var (WithPos _ _ _ (LoxTok (Identifier name) _)) e) = do
   env <- get
   case e of
@@ -158,16 +158,22 @@ eval (Expr.Call callable parens as) = do
         Just v ->
           case v of
             -- when the callable is a function
-            LoxFunction (Function _ ps (Expr.Block es)) -> do
+            LoxFunction f@(Function _ ps (Expr.Block es)) closure -> do
               if length ps /= length as
                 then error "ps and as don't match"
                 else
                   ( do
                       oldEnv <- get
-                      put $ enclosed oldEnv
+                      put $ enclosed $ closure {parent = Just oldEnv}
                       populate ps as -- insert args/params values into the new env
                       e <- (last <$> traverse eval es) `catchError` checkReturnOrError
-                      put oldEnv
+                      env' <- get
+                      case parent env' of
+                        Just e -> case assignVar oldEnv (n, LoxFunction f (emptyEnv {values = values e})) of
+                          Just e' -> put e'
+                          Nothing -> error "idk"
+                        Nothing -> error "idk"
+
                       pure e
                   )
             _ -> error "unexpected"
@@ -203,9 +209,8 @@ eval (Expr.Return e) = do
   v <- eval e
   throwError $ ReturnException v
 eval f@(Expr.Function (WithPos _ _ _ (LoxTok (TokenType.Identifier n) _)) _ _) = do
-  let fun = LoxFunction f
   env <- get
-  put $ setVar env (n, fun)
+  put $ setVar env (n, LoxFunction f env)
   pure Interpreter.Nil
 eval _ = undefined
 
