@@ -21,6 +21,7 @@ data Expr
   | And Expr Expr
   | Call Expr (WithPos LoxTok) [Expr]
   | Block [Expr]
+  | Return Expr
   | Function (WithPos LoxTok) [WithPos LoxTok] Expr
   deriving (Show)
 

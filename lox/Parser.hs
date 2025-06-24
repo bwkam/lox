@@ -6,7 +6,7 @@ import Data.Maybe (fromJust)
 import qualified Data.Set as Set
 import Data.Text (Text)
 import Data.Void
-import Expr (Expr (And, Assign, Binary, Block, Call, Expression, Function, If, Literal, Or, Print, Unary, Var, Variable, While), LiteralValue (Boolean, Nil, Number, String))
+import Expr (Expr (And, Assign, Binary, Block, Call, Expression, Function, If, Literal, Or, Print, Return, Unary, Var, Variable, While), LiteralValue (Boolean, Nil, Number, String))
 import Scanner (scan)
 import Text.Megaparsec (ErrorItem (Label), MonadParsec (eof, lookAhead, try, withRecovery), ParseErrorBundle, ParsecT, anySingle, between, choice, errorBundlePretty, many, optional, parse, registerParseError, satisfy, skipManyTill, token, (<|>))
 import Token (LoxTok (LoxTok), LoxTokStream, WithPos (WithPos))
@@ -71,7 +71,16 @@ varDecl = do
     Nothing -> pure $ Expr.Var ident Nothing
 
 statement :: Parser Expr
-statement = choice [printStmt, exprStmt, forStmt, whileStmt, block, ifStmt]
+statement = choice [printStmt, exprStmt, forStmt, whileStmt, block, ifStmt, retStmt]
+
+retStmt :: Parser Expr
+retStmt = do
+  _ <- return_
+  e <- optional expression
+  _ <- semicolon
+  case e of
+    Just e' -> pure $ Expr.Return e'
+    Nothing -> pure $ Expr.Return (Literal Expr.Nil)
 
 whileStmt :: Parser Expr
 whileStmt = do
@@ -495,6 +504,12 @@ for = token getFor (Set.singleton (Label $ nonEmpty' "for"))
   where
     getFor wp@(WithPos _ _ _ (LoxTok TokenType.For _)) = Just wp
     getFor _ = Nothing
+
+return_ :: Parser (WithPos LoxTok)
+return_ = token getReturn (Set.singleton (Label $ nonEmpty' "return"))
+  where
+    getReturn wp@(WithPos _ _ _ (LoxTok TokenType.Return _)) = Just wp
+    getReturn _ = Nothing
 
 comma :: Parser (WithPos LoxTok)
 comma = token getComma (Set.singleton (Label $ nonEmpty' "comma"))

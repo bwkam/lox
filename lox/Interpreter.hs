@@ -5,12 +5,12 @@
 module Interpreter (eval, eval') where
 
 import Control.Monad (MonadPlus (mplus), zipWithM)
-import Control.Monad.Except (ExceptT, MonadError (catchError, throwError), runExceptT)
+import Control.Monad.Except (ExceptT, MonadError (catchError, throwError), liftEither, runExceptT)
 import Control.Monad.State (MonadIO (liftIO), MonadState (get, put), StateT (runStateT), modify)
 import Data.Foldable (traverse_)
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromJust)
-import Expr (Expr (And, Assign, Binary, Block, Call, Expression, Function, Grouping, If, Literal, Or, Print, Unary, Var, Variable, While), LiteralValue (..))
+import Expr (Expr (And, Assign, Binary, Block, Call, Expression, Function, Grouping, If, Literal, Or, Print, Return, Unary, Var, Variable, While), LiteralValue (..))
 import GHC.Base (error)
 import qualified Parser
 import Text.Megaparsec (errorBundlePretty)
@@ -27,11 +27,13 @@ data Value
   | LoxFunction Expr
   deriving (Show)
 
+data Exception = Error (WithPos LoxTok, String) | ReturnException Value deriving (Show)
+
 type Env = M.Map String Value
 
 data Environment = Environment {values :: Env, parent :: Maybe Environment, globals :: Env} deriving (Show)
 
-type Result = ExceptT (WithPos LoxTok, String) (StateT Environment IO)
+type Result = ExceptT Exception (StateT Environment IO)
 
 eval' :: String -> IO ()
 eval' src = do
@@ -53,7 +55,7 @@ eval (Grouping expr) = eval expr
 eval (Unary wp@(WithPos _ _ _ (LoxTok tt _)) expr) = case (tt, expr) of
   (Minus, Literal (Expr.Number n)) -> pure $ Interpreter.Number $ -n
   (Bang, e) -> eval e >>= ((pure . Interpreter.Boolean) . not . isTruthy)
-  (_, _) -> throwError (wp, "wrong operands for " ++ show tt)
+  (_, _) -> throwError $ Error (wp, "wrong operands for " ++ show tt)
 eval (Binary e1 wp@(WithPos _ _ _ t) e2) = do
   v1 <- eval e1
   v2 <- eval e2
@@ -69,7 +71,7 @@ eval (Binary e1 wp@(WithPos _ _ _ t) e2) = do
     (Interpreter.Number v1', LessEqual, Interpreter.Number v2') -> pure $ Interpreter.Boolean $ v1' <= v2'
     (_, BangEqual, _) -> pure $ Interpreter.Boolean $ not $ isEqual e1 e2
     (_, EqualEqual, _) -> pure $ Interpreter.Boolean $ isEqual e1 e2
-    _ -> throwError (wp, "wrong operands for " ++ show (tokenType t))
+    _ -> throwError $ Error (wp, "wrong operands for " ++ show (tokenType t))
 eval (Expression e) = eval e
 eval (Expr.Print e) = do
   e' <- eval e
@@ -104,7 +106,7 @@ eval (Expr.Var (WithPos _ _ _ (LoxTok (Identifier name) _)) e) = do
       pure Interpreter.Nil
 eval (Expr.Variable wp@(WithPos _ _ _ (LoxTok (Identifier name) _))) = do
   env <- get
-  maybe (throwError (wp, "undefined variable: " <> name)) pure (getVar env name)
+  maybe (throwError $ Error (wp, "undefined variable: " <> name)) pure (getVar env name)
 eval (Expr.Assign (Variable wp@(WithPos _ _ _ (LoxTok (Identifier name) _))) r) = do
   v' <- eval r
   env <- get
@@ -113,7 +115,7 @@ eval (Expr.Assign (Variable wp@(WithPos _ _ _ (LoxTok (Identifier name) _))) r) 
     Just e' -> do
       put e'
       pure v'
-    Nothing -> throwError (wp, "undefined variable: " <> name)
+    Nothing -> throwError $ Error (wp, "undefined variable: " <> name)
 eval (Expr.Block es) = do
   openNewClosure
   e <- last <$> traverse eval es
@@ -149,10 +151,10 @@ eval (Expr.While c e) = do
     go False = pure Interpreter.Void
     go True = eval e >> (eval c >>= (go . isTruthy))
 eval (Expr.Call callable parens as) = do
-  (Environment vs _ _) <- get
+  env <- get -- current environment
   e <- case callable of
     Variable (WithPos _ _ _ (LoxTok (TokenType.Identifier n) _)) ->
-      case M.lookup n vs of
+      case lookupVar n env of
         Just v ->
           case v of
             -- when the callable is a function
@@ -162,9 +164,9 @@ eval (Expr.Call callable parens as) = do
                 else
                   ( do
                       oldEnv <- get
-                      put emptyEnv
-                      populate ps as
-                      e <- last <$> traverse eval es
+                      put $ enclosed oldEnv
+                      populate ps as -- insert args/params values into the new env
+                      e <- (last <$> traverse eval es) `catchError` checkReturnOrError
                       put oldEnv
                       pure e
                   )
@@ -173,6 +175,9 @@ eval (Expr.Call callable parens as) = do
     _ -> error "function isn't a variable"
   pure e
   where
+    checkReturnOrError :: Exception -> Result Value
+    checkReturnOrError e@(Error _) = throwError e
+    checkReturnOrError (ReturnException v) = liftEither $ Right v
     -- args -> params
     populate :: [WithPos LoxTok] -> [Expr] -> Result ()
     populate as' ps =
@@ -194,6 +199,9 @@ eval (Expr.Call callable parens as) = do
               get >>= \e -> put $ setVar e p
           )
           vars
+eval (Expr.Return e) = do
+  v <- eval e
+  throwError $ ReturnException v
 eval f@(Expr.Function (WithPos _ _ _ (LoxTok (TokenType.Identifier n) _)) _ _) = do
   let fun = LoxFunction f
   env <- get
@@ -209,6 +217,14 @@ assignVar env (n, v) = maybeAssignToEnv `mplus` maybeAssignToParentEnv
       parentEnv <- parent env
       parentEnv' <- assignVar parentEnv (n, v)
       return $ env {parent = Just parentEnv'}
+
+lookupVar :: String -> Environment -> Maybe Value
+lookupVar s env = lookupCur `mplus` lookupEnclosing
+  where
+    lookupCur = M.lookup s (values env)
+    lookupEnclosing = do
+      parentEnv <- parent env
+      lookupVar s parentEnv
 
 setVar :: Environment -> (String, Value) -> Environment
 setVar env (n, v) = env {values = M.insert n v (values env)}
