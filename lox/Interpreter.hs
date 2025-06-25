@@ -2,18 +2,20 @@
 {-# HLINT ignore "Use tuple-section" #-}
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
-module Interpreter (eval, eval') where
+module Interpreter (eval, eval', Environment (Environment)) where
 
 import Control.Monad (MonadPlus (mplus), zipWithM)
 import Control.Monad.Except (ExceptT, MonadError (catchError, throwError), liftEither, runExceptT)
-import Control.Monad.State (MonadIO (liftIO), MonadState (get, put), StateT (runStateT), modify)
+import Control.Monad.State (MonadIO (liftIO), MonadState (get, put), MonadTrans (lift), StateT (runStateT), modify)
 import Data.Foldable (traverse_)
+import Data.List (intercalate)
 import qualified Data.Map.Strict as M
 import Data.Maybe (fromJust)
 import Expr (Expr (And, Assign, Binary, Block, Call, Expression, Function, Grouping, If, Literal, Or, Print, Return, Unary, Var, Variable, While), LiteralValue (..))
 import GHC.Base (error)
 import qualified Parser
 import Text.Megaparsec (errorBundlePretty)
+import Text.Printf (printf)
 import Token (LoxTok (LoxTok, tokenType), WithPos (WithPos))
 import TokenType (TokenType (Bang, BangEqual, EqualEqual, Greater, GreaterEqual, Identifier, Less, LessEqual, Minus, Plus, Slash, Star))
 import Prelude hiding (error)
@@ -165,11 +167,17 @@ eval (Expr.Call callable parens as) = do
                   ( do
                       oldEnv <- get
                       put $ enclosed $ closure {parent = Just oldEnv}
+
+                      -- liftIO $ print oldEnv
+                      printEnv
+
                       populate ps as -- insert args/params values into the new env
                       e <- (last <$> traverse eval es) `catchError` checkReturnOrError
+
+                      printEnv
                       env' <- get
                       case parent env' of
-                        Just e -> case assignVar oldEnv (n, LoxFunction f (emptyEnv {values = values e})) of
+                        Just clo -> case assignVar oldEnv (n, LoxFunction f (emptyEnv {values = values clo})) of
                           Just e' -> put e'
                           Nothing -> error "idk"
                         Nothing -> error "idk"
@@ -258,3 +266,42 @@ isTruthy :: Value -> Bool
 isTruthy Interpreter.Nil = False
 isTruthy (Interpreter.Boolean False) = False
 isTruthy _ = True
+
+printEnv :: Result ()
+printEnv = do
+  e <- get
+  let s = go e 0
+  liftIO $ putStr s
+  where
+    go :: Environment -> Int -> String
+    go (Environment vals mparent _) depth =
+      indent depth
+        ++ "Environment\n"
+        ++ indent (depth + 1)
+        ++ "values: [\n"
+        ++ printValues vals (depth + 2)
+        ++ indent (depth + 1)
+        ++ "]\n"
+        ++ case mparent of
+          Nothing -> indent (depth + 1) ++ "parent: None\n"
+          Just parent -> indent (depth + 1) ++ "parent:\n" ++ go parent (depth + 2)
+
+    indent :: Int -> String
+    indent n = replicate (n * 2) ' '
+
+    printValues :: Env -> Int -> String
+    printValues env d
+      | M.null env = indent d ++ "-- empty --\n"
+      | otherwise = concatMap (printEntry d) (M.toList env)
+
+    printEntry :: Int -> (String, Value) -> String
+    printEntry d (k, v) = indent d ++ printf "(%s, %s)\n" k (printVal v)
+
+    printVal :: Value -> String
+    printVal v = case v of
+      Interpreter.Nil -> "Nil"
+      Interpreter.Void -> "Void"
+      Interpreter.Boolean b -> show b
+      Interpreter.Number n -> show n
+      Interpreter.String s -> show s
+      LoxFunction {} -> "LoxFunction <...>"
