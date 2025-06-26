@@ -1,22 +1,19 @@
+{-# LANGUAGE RecordWildCards #-}
+
 module Resolver (resolve, resolve'') where
 
-import Control.Monad.State (MonadIO (liftIO), MonadState (get), StateT (runStateT), modify)
+import Control.Monad.Except (ExceptT, runExceptT)
+import Control.Monad.State (MonadIO (liftIO), MonadState (get), StateT (runStateT), gets, modify)
 import Data.Bifunctor (Bifunctor (first, second))
+import Data.Either (fromRight)
 import Data.Foldable (traverse_)
 import qualified Data.Map.Strict as M
 import Expr (Expr (..))
+import Interpreter (Locals, LoxState (LoxState, locals, scopes), Result, Scope, emptyState)
 import qualified Parser
 import Text.Megaparsec (errorBundlePretty)
 import Token (LoxTok (LoxTok), WithPos (WithPos))
 import TokenType (TokenType (Identifier))
-
-type Result a = StateT (Scopes, Locals) IO a
-
-type Scope = M.Map String Bool
-
-type Scopes = [Scope]
-
-type Locals = M.Map Expr Int
 
 resolve'' :: String -> IO ()
 resolve'' src = do
@@ -25,10 +22,10 @@ resolve'' src = do
         Left (Nothing, sErrors) -> traverse_ (liftIO . print) sErrors
         Left (Just e, Nothing) -> liftIO $ putStrLn $ errorBundlePretty e
         Left (Just _, Just _) -> liftIO $ putStrLn "no way!!!!"
-  (_, (ss, ls)) <- runStateT action ([M.empty], M.empty)
-  print ls
+  (_, st) <- runStateT (runExceptT action) emptyState
+  print $ locals st
   putStrLn "---------"
-  print ss
+  print $ scopes st
   pure ()
 
 resolve :: Expr -> Result ()
@@ -75,7 +72,7 @@ resolve (Expr.Unary _ e') = resolve e'
 resolve _ = error "can't resolve that"
 
 resolve' :: Expr -> Int -> Result ()
-resolve' e depth = modify (second (M.insert e depth))
+resolve' e depth = modify $ \s -> s {locals = M.insert e depth (locals s)}
 
 resolveFunction :: Expr -> Result ()
 resolveFunction (Expr.Function _ ps body) = do
@@ -87,15 +84,15 @@ resolveFunction _ = error "can't resolve non-function"
 
 resolveLocal :: Expr -> WithPos LoxTok -> Result ()
 resolveLocal e (WithPos _ _ _ (LoxTok (Identifier name) _)) = do
-  (ss, _) <- get
-  let ((i, s) : _) = filter (M.member name . snd) (zip [0 ..] ss)
+  st <- get
+  let ((i, s) : _) = filter (M.member name . snd) (zip [0 ..] (scopes st))
   resolve' e i
 
 beginScope :: Result ()
-beginScope = modify (first (M.empty :))
+beginScope = modify $ \s -> s {scopes = M.empty : scopes s}
 
 endScope :: Result ()
-endScope = modify (first tail)
+endScope = modify $ \s -> s {scopes = tail (scopes s)}
 
 declare :: WithPos LoxTok -> Result ()
 declare (WithPos _ _ _ (LoxTok (Identifier name) _)) = push (name, False)
@@ -106,9 +103,9 @@ define (WithPos _ _ _ (LoxTok (Identifier name) _)) = push (name, True)
 define _ = error "can't define non-variable"
 
 peek :: Result Scope
-peek = do
-  (s : _, _) <- get
-  pure s
+peek = gets (head . scopes)
 
 push :: (String, Bool) -> Result ()
-push (name, k) = modify (\(s : ss, ls) -> (M.insert name k s : ss, ls))
+push (name, k) = modify $ \s -> s {scopes = M.insert name k (head (scopes s)) : tail (scopes s)}
+
+-- push (name, k) = modify (\(s : ss, ls) -> (M.insert name k s : ss, ls))

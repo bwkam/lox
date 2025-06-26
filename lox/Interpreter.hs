@@ -2,11 +2,11 @@
 {-# HLINT ignore "Use tuple-section" #-}
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
-module Interpreter (eval, eval', Environment (Environment), Exception) where
+module Interpreter where
 
 import Control.Monad (MonadPlus (mplus), zipWithM)
 import Control.Monad.Except (ExceptT, MonadError (catchError, throwError), liftEither, runExceptT)
-import Control.Monad.State (MonadIO (liftIO), MonadState (get, put), MonadTrans (lift), StateT (runStateT), modify)
+import Control.Monad.State (MonadIO (liftIO), MonadState (get, put), MonadTrans (lift), StateT (runStateT), gets, modify)
 import Data.Foldable (traverse_)
 import Data.List (intercalate)
 import qualified Data.Map.Strict as M
@@ -29,13 +29,28 @@ data Value
   | LoxFunction Expr Environment
   deriving (Show)
 
+type Scope = M.Map String Bool
+
+type Scopes = [Scope]
+
+type Locals = M.Map Expr Int
+
 data Exception = ErrorTok (WithPos LoxTok, String) | ReturnException Value | Error String deriving (Show)
 
 type Env = M.Map String Value
 
 data Environment = Environment {values :: Env, parent :: Maybe Environment, globals :: Env} deriving (Show)
 
-type Result = ExceptT Exception (StateT Environment IO)
+data LoxState = LoxState
+  { scopes :: Scopes,
+    locals :: Locals,
+    environment :: Environment
+  }
+
+emptyState :: LoxState
+emptyState = LoxState {scopes = [M.empty], locals = M.empty, environment = emptyEnv}
+
+type Result a = ExceptT Exception (StateT LoxState IO) a
 
 eval' :: String -> IO ()
 eval' src = do
@@ -44,7 +59,7 @@ eval' src = do
         Left (Nothing, sErrors) -> traverse_ (liftIO . print) sErrors
         Left (Just e, Nothing) -> liftIO $ putStrLn $ errorBundlePretty e
         Left (Just _, Just _) -> liftIO $ putStrLn "no way!!!!"
-  _ <- runStateT (runExceptT action) (Environment M.empty Nothing M.empty)
+  _ <- runStateT (runExceptT action) emptyState
   pure ()
 
 eval :: Expr -> Result Value
@@ -97,25 +112,26 @@ eval (Expr.Print e) = do
       liftIO $ putStrLn "some function"
       pure Interpreter.Nil
 eval (Expr.Var (WithPos _ _ _ (LoxTok (Identifier name) _)) e) = do
-  env <- get
+  st <- get
+  let env = environment st
   case e of
     Just e' -> do
       v <- eval e'
-      put $ setVar env (name, v)
+      put $ st {environment = setVar env (name, v)}
       pure v
     Nothing -> do
-      put $ setVar env (name, Interpreter.Nil)
+      put $ st {environment = setVar env (name, Interpreter.Nil)}
       pure Interpreter.Nil
 eval (Expr.Variable wp@(WithPos _ _ _ (LoxTok (Identifier name) _))) = do
-  env <- get
-  maybe (throwError $ ErrorTok (wp, "undefined variable: " <> name)) pure (getVar env name)
+  st <- get
+  maybe (throwError $ ErrorTok (wp, "undefined variable: " <> name)) pure (getVar (environment st) name)
 eval (Expr.Assign (Variable wp@(WithPos _ _ _ (LoxTok (Identifier name) _))) r) = do
   v' <- eval r
-  env <- get
+  st <- get
 
-  case assignVar env (name, v') of
+  case assignVar (environment st) (name, v') of
     Just e' -> do
-      put e'
+      put $ st {environment = e'}
       pure v'
     Nothing -> throwError $ ErrorTok (wp, "undefined variable: " <> name)
 eval (Expr.Block es) = do
@@ -125,9 +141,9 @@ eval (Expr.Block es) = do
   pure e
   where
     openNewClosure :: Result ()
-    openNewClosure = get >>= put . enclosed
+    openNewClosure = modify $ \s -> s {environment = enclosed (environment s)}
     closeNewClosure :: Result ()
-    closeNewClosure = get >>= put . fromJust . parent
+    closeNewClosure = modify $ \s -> s {environment = fromJust (parent $ environment s)}
 eval (Expr.If c e e') = do
   c' <- eval c
 
@@ -153,7 +169,8 @@ eval (Expr.While c e) = do
     go False = pure Interpreter.Void
     go True = eval e >> (eval c >>= (go . isTruthy))
 eval (Expr.Call callable parens as) = do
-  env <- get -- current environment
+  st <- get -- current environment
+  let env = environment st
   e <- case callable of
     Variable (WithPos _ _ _ (LoxTok (TokenType.Identifier n) _)) ->
       case lookupVar n env of
@@ -165,16 +182,17 @@ eval (Expr.Call callable parens as) = do
                 then error "ps and as don't match"
                 else
                   ( do
-                      oldEnv <- get
-                      put $ enclosed $ closure {parent = Just oldEnv}
+                      oldEnv <- gets environment
+                      -- put $ enclosed $ closure {parent = Just oldEnv}
+                      modify $ \s -> s {environment = enclosed $ closure {parent = Just oldEnv}}
 
                       populate ps as -- insert args/params values into the new env
                       e <- (last <$> traverse eval es) `catchError` checkReturnOrError
 
-                      env' <- get
+                      env' <- gets environment
                       case parent env' of
                         Just clo -> case assignVar oldEnv (n, LoxFunction f (emptyEnv {values = values clo})) of
-                          Just e' -> put e'
+                          Just e' -> modify $ \s -> s {environment = e'}
                           Nothing -> error "idk"
                         Nothing -> error "idk"
 
@@ -206,15 +224,16 @@ eval (Expr.Call callable parens as) = do
             ps
         mapM_
           ( \p ->
-              get >>= \e -> put $ setVar e p
+              -- get >>= \e -> put $ setVar e p
+              modify $ \s -> s {environment = setVar (environment s) p}
           )
           vars
 eval (Expr.Return e) = do
   v <- eval e
   throwError $ ReturnException v
 eval f@(Expr.Function (WithPos _ _ _ (LoxTok (TokenType.Identifier n) _)) _ _) = do
-  env <- get
-  put $ setVar env (n, LoxFunction f env)
+  env <- gets environment
+  modify $ \s -> s {environment = setVar env (n, LoxFunction f env)}
   pure Interpreter.Nil
 eval _ = undefined
 
@@ -265,7 +284,8 @@ isTruthy _ = True
 
 printEnv :: Result ()
 printEnv = do
-  e <- get
+  st <- get
+  let e = environment st
   let s = go e 0
   liftIO $ putStr s
   where
