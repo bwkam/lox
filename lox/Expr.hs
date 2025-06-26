@@ -23,10 +23,10 @@ data Expr
   | Block [Expr]
   | Return Expr
   | Function (WithPos LoxTok) [WithPos LoxTok] Expr
-  deriving (Show)
+  deriving (Show, Ord, Eq)
 
 data LiteralValue = Number Double | String String | Boolean Bool | Nil
-  deriving (Eq)
+  deriving (Eq, Ord)
 
 instance Show LiteralValue where
   show :: LiteralValue -> String

@@ -2,7 +2,7 @@
 {-# HLINT ignore "Use tuple-section" #-}
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
-module Interpreter (eval, eval', Environment (Environment)) where
+module Interpreter (eval, eval', Environment (Environment), Exception) where
 
 import Control.Monad (MonadPlus (mplus), zipWithM)
 import Control.Monad.Except (ExceptT, MonadError (catchError, throwError), liftEither, runExceptT)
@@ -29,7 +29,7 @@ data Value
   | LoxFunction Expr Environment
   deriving (Show)
 
-data Exception = Error (WithPos LoxTok, String) | ReturnException Value deriving (Show)
+data Exception = ErrorTok (WithPos LoxTok, String) | ReturnException Value | Error String deriving (Show)
 
 type Env = M.Map String Value
 
@@ -57,7 +57,7 @@ eval (Grouping expr) = eval expr
 eval (Unary wp@(WithPos _ _ _ (LoxTok tt _)) expr) = case (tt, expr) of
   (Minus, Literal (Expr.Number n)) -> pure $ Interpreter.Number $ -n
   (Bang, e) -> eval e >>= ((pure . Interpreter.Boolean) . not . isTruthy)
-  (_, _) -> throwError $ Error (wp, "wrong operands for " ++ show tt)
+  (_, _) -> throwError $ ErrorTok (wp, "wrong operands for " ++ show tt)
 eval (Binary e1 wp@(WithPos _ _ _ t) e2) = do
   v1 <- eval e1
   v2 <- eval e2
@@ -73,7 +73,7 @@ eval (Binary e1 wp@(WithPos _ _ _ t) e2) = do
     (Interpreter.Number v1', LessEqual, Interpreter.Number v2') -> pure $ Interpreter.Boolean $ v1' <= v2'
     (_, BangEqual, _) -> pure $ Interpreter.Boolean $ not $ isEqual e1 e2
     (_, EqualEqual, _) -> pure $ Interpreter.Boolean $ isEqual e1 e2
-    _ -> throwError $ Error (wp, "wrong operands for " ++ show (tokenType t))
+    _ -> throwError $ ErrorTok (wp, "wrong operands for " ++ show (tokenType t))
 eval (Expression e) = eval e
 eval (Expr.Print e) = do
   e' <- eval e
@@ -108,7 +108,7 @@ eval (Expr.Var (WithPos _ _ _ (LoxTok (Identifier name) _)) e) = do
       pure Interpreter.Nil
 eval (Expr.Variable wp@(WithPos _ _ _ (LoxTok (Identifier name) _))) = do
   env <- get
-  maybe (throwError $ Error (wp, "undefined variable: " <> name)) pure (getVar env name)
+  maybe (throwError $ ErrorTok (wp, "undefined variable: " <> name)) pure (getVar env name)
 eval (Expr.Assign (Variable wp@(WithPos _ _ _ (LoxTok (Identifier name) _))) r) = do
   v' <- eval r
   env <- get
@@ -117,7 +117,7 @@ eval (Expr.Assign (Variable wp@(WithPos _ _ _ (LoxTok (Identifier name) _))) r) 
     Just e' -> do
       put e'
       pure v'
-    Nothing -> throwError $ Error (wp, "undefined variable: " <> name)
+    Nothing -> throwError $ ErrorTok (wp, "undefined variable: " <> name)
 eval (Expr.Block es) = do
   openNewClosure
   e <- last <$> traverse eval es
@@ -168,13 +168,9 @@ eval (Expr.Call callable parens as) = do
                       oldEnv <- get
                       put $ enclosed $ closure {parent = Just oldEnv}
 
-                      -- liftIO $ print oldEnv
-                      printEnv
-
                       populate ps as -- insert args/params values into the new env
                       e <- (last <$> traverse eval es) `catchError` checkReturnOrError
 
-                      printEnv
                       env' <- get
                       case parent env' of
                         Just clo -> case assignVar oldEnv (n, LoxFunction f (emptyEnv {values = values clo})) of
@@ -190,7 +186,7 @@ eval (Expr.Call callable parens as) = do
   pure e
   where
     checkReturnOrError :: Exception -> Result Value
-    checkReturnOrError e@(Error _) = throwError e
+    checkReturnOrError e@(ErrorTok _) = throwError e
     checkReturnOrError (ReturnException v) = liftEither $ Right v
     -- args -> params
     populate :: [WithPos LoxTok] -> [Expr] -> Result ()

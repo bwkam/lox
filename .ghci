@@ -1,2 +1,2 @@
-:l Parser Scanner
+:l Parser Scanner Resolver
 :m + Data.Either
