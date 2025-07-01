@@ -1,4 +1,10 @@
+{-# LANGUAGE DeriveAnyClass #-}
+{-# LANGUAGE DeriveGeneric #-}
+
 module TokenType (TokenType (..)) where
+
+import Data.Hashable (Hashable)
+import GHC.Generics (Generic)
 
 data TokenType
   = -- Single-character tokens
@@ -48,7 +54,7 @@ data TokenType
   | Var
   | While
   | EOF
-  deriving (Eq, Ord)
+  deriving (Eq, Ord, Hashable, Generic)
 
 instance Show TokenType where
   show token = case token of

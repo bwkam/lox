@@ -4,136 +4,98 @@
 
 module Interpreter where
 
-import Control.Monad (MonadPlus (mplus), zipWithM)
-import Control.Monad.Except (ExceptT, MonadError (catchError, throwError), liftEither, runExceptT)
-import Control.Monad.State (MonadIO (liftIO), MonadState (get, put), MonadTrans (lift), StateT (runStateT), gets, modify)
+import Control.Monad (zipWithM)
+import Control.Monad.Error.Class
+import Control.Monad.Except (MonadError (catchError, throwError), runExceptT)
+import Control.Monad.State (MonadIO (liftIO), MonadState (get), StateT (runStateT), gets, modify)
 import Data.Foldable (traverse_)
-import Data.List (intercalate)
-import qualified Data.Map.Strict as M
-import Data.Maybe (fromJust)
+import Data.Maybe (fromJust, fromMaybe)
 import Expr (Expr (And, Assign, Binary, Block, Call, Expression, Function, Grouping, If, Literal, Or, Print, Return, Unary, Var, Variable, While), LiteralValue (..))
 import GHC.Base (error)
 import qualified Parser
+import Runtime
 import Text.Megaparsec (errorBundlePretty)
-import Text.Printf (printf)
 import Token (LoxTok (LoxTok, tokenType), WithPos (WithPos))
 import TokenType (TokenType (Bang, BangEqual, EqualEqual, Greater, GreaterEqual, Identifier, Less, LessEqual, Minus, Plus, Slash, Star))
 import Prelude hiding (error)
 
-data Value
-  = Nil
-  | Void
-  | Boolean Bool
-  | Number Double
-  | String String
-  | LoxFunction Expr Environment
-  deriving (Show)
-
-type Scope = M.Map String Bool
-
-type Scopes = [Scope]
-
-type Locals = M.Map Expr Int
-
-data Exception = ErrorTok (WithPos LoxTok, String) | ReturnException Value | Error String deriving (Show)
-
-type Env = M.Map String Value
-
-data Environment = Environment {values :: Env, parent :: Maybe Environment, globals :: Env} deriving (Show)
-
-data LoxState = LoxState
-  { scopes :: Scopes,
-    locals :: Locals,
-    environment :: Environment
-  }
-
-emptyState :: LoxState
-emptyState = LoxState {scopes = [M.empty], locals = M.empty, environment = emptyEnv}
-
-type Result a = ExceptT Exception (StateT LoxState IO) a
-
 eval' :: String -> IO ()
 eval' src = do
   let action = case Parser.parse src of
-        Right es -> mapM_ eval es `catchError` (liftIO . print)
+        Right es -> do
+          -- mapM_ resolve es `catchError` (liftIO . print)
+          mapM_ eval es `catchError` (liftIO . print)
         Left (Nothing, sErrors) -> traverse_ (liftIO . print) sErrors
         Left (Just e, Nothing) -> liftIO $ putStrLn $ errorBundlePretty e
         Left (Just _, Just _) -> liftIO $ putStrLn "no way!!!!"
-  _ <- runStateT (runExceptT action) emptyState
+  (_, st) <- runStateT (runExceptT action) emptyState
   pure ()
 
 eval :: Expr -> Result Value
 eval (Literal inner) = case inner of
-  Expr.Number n -> pure $ Interpreter.Number n
-  Expr.Boolean b -> pure $ Interpreter.Boolean b
-  Expr.Nil -> pure Interpreter.Nil
-  Expr.String s -> pure $ Interpreter.String s
+  Expr.Number n -> pure $ Runtime.Number n
+  Expr.Boolean b -> pure $ Runtime.Boolean b
+  Expr.Nil -> pure Runtime.Nil
+  Expr.String s -> pure $ Runtime.String s
 eval (Grouping expr) = eval expr
 eval (Unary wp@(WithPos _ _ _ (LoxTok tt _)) expr) = case (tt, expr) of
-  (Minus, Literal (Expr.Number n)) -> pure $ Interpreter.Number $ -n
-  (Bang, e) -> eval e >>= ((pure . Interpreter.Boolean) . not . isTruthy)
+  (Minus, Literal (Expr.Number n)) -> pure $ Runtime.Number $ -n
+  (Bang, e) -> eval e >>= ((pure . Runtime.Boolean) . not . isTruthy)
   (_, _) -> throwError $ ErrorTok (wp, "wrong operands for " ++ show tt)
 eval (Binary e1 wp@(WithPos _ _ _ t) e2) = do
   v1 <- eval e1
   v2 <- eval e2
   case (v1, tokenType t, v2) of
-    (Interpreter.Number v1', Minus, Interpreter.Number v2') -> pure $ Interpreter.Number $ v1' - v2'
-    (Interpreter.Number v1', Slash, Interpreter.Number v2') -> pure $ Interpreter.Number $ v1' / v2'
-    (Interpreter.Number v1', Star, Interpreter.Number v2') -> pure $ Interpreter.Number $ v1' * v2'
-    (Interpreter.Number v1', Plus, Interpreter.Number v2') -> pure $ Interpreter.Number $ v1' + v2'
-    (Interpreter.String v1', Plus, Interpreter.String v2') -> pure $ Interpreter.String $ v1' ++ v2'
-    (Interpreter.Number v1', Greater, Interpreter.Number v2') -> pure $ Interpreter.Boolean $ v1' > v2'
-    (Interpreter.Number v1', GreaterEqual, Interpreter.Number v2') -> pure $ Interpreter.Boolean $ v1' >= v2'
-    (Interpreter.Number v1', Less, Interpreter.Number v2') -> pure $ Interpreter.Boolean $ v1' < v2'
-    (Interpreter.Number v1', LessEqual, Interpreter.Number v2') -> pure $ Interpreter.Boolean $ v1' <= v2'
-    (_, BangEqual, _) -> pure $ Interpreter.Boolean $ not $ isEqual e1 e2
-    (_, EqualEqual, _) -> pure $ Interpreter.Boolean $ isEqual e1 e2
+    (Runtime.Number v1', Minus, Runtime.Number v2') -> pure $ Runtime.Number $ v1' - v2'
+    (Runtime.Number v1', Slash, Runtime.Number v2') -> pure $ Runtime.Number $ v1' / v2'
+    (Runtime.Number v1', Star, Runtime.Number v2') -> pure $ Runtime.Number $ v1' * v2'
+    (Runtime.Number v1', Plus, Runtime.Number v2') -> pure $ Runtime.Number $ v1' + v2'
+    (Runtime.String v1', Plus, Runtime.String v2') -> pure $ Runtime.String $ v1' ++ v2'
+    (Runtime.Number v1', Greater, Runtime.Number v2') -> pure $ Runtime.Boolean $ v1' > v2'
+    (Runtime.Number v1', GreaterEqual, Runtime.Number v2') -> pure $ Runtime.Boolean $ v1' >= v2'
+    (Runtime.Number v1', Less, Runtime.Number v2') -> pure $ Runtime.Boolean $ v1' < v2'
+    (Runtime.Number v1', LessEqual, Runtime.Number v2') -> pure $ Runtime.Boolean $ v1' <= v2'
+    (_, BangEqual, _) -> pure $ Runtime.Boolean $ v1 /= v2
+    (_, EqualEqual, _) -> pure $ Runtime.Boolean $ v1 == v2
     _ -> throwError $ ErrorTok (wp, "wrong operands for " ++ show (tokenType t))
 eval (Expression e) = eval e
 eval (Expr.Print e) = do
   e' <- eval e
-  case e' of
-    (Interpreter.Number n) -> do
-      liftIO $ print n
-      pure Interpreter.Nil
-    Interpreter.Nil -> do
-      liftIO $ putStrLn "nil"
-      pure Interpreter.Nil
-    Interpreter.Void -> do
-      liftIO $ putStrLn "void"
-      pure Interpreter.Nil
-    (Interpreter.String s) -> do
-      liftIO $ print s
-      pure Interpreter.Nil
-    (Interpreter.Boolean b) -> do
-      liftIO $ print b
-      pure Interpreter.Nil
-    (Interpreter.LoxFunction f _) -> do
-      liftIO $ putStrLn "some function"
-      pure Interpreter.Nil
-eval (Expr.Var (WithPos _ _ _ (LoxTok (Identifier name) _)) e) = do
-  st <- get
-  let env = environment st
-  case e of
-    Just e' -> do
-      v <- eval e'
-      put $ st {environment = setVar env (name, v)}
-      pure v
-    Nothing -> do
-      put $ st {environment = setVar env (name, Interpreter.Nil)}
-      pure Interpreter.Nil
-eval (Expr.Variable wp@(WithPos _ _ _ (LoxTok (Identifier name) _))) = do
-  st <- get
-  maybe (throwError $ ErrorTok (wp, "undefined variable: " <> name)) pure (getVar (environment st) name)
-eval (Expr.Assign (Variable wp@(WithPos _ _ _ (LoxTok (Identifier name) _))) r) = do
-  v' <- eval r
-  st <- get
 
-  case assignVar (environment st) (name, v') of
-    Just e' -> do
-      put $ st {environment = e'}
-      pure v'
-    Nothing -> throwError $ ErrorTok (wp, "undefined variable: " <> name)
+  case e' of
+    (Runtime.Number n) -> do
+      liftIO $ print n
+      pure Runtime.Nil
+    Runtime.Nil -> do
+      liftIO $ putStrLn "nil"
+      pure Runtime.Nil
+    Runtime.Void -> do
+      liftIO $ putStrLn "void"
+      pure Runtime.Nil
+    (Runtime.String s) -> do
+      liftIO $ print s
+      pure Runtime.Nil
+    (Runtime.Boolean b) -> do
+      liftIO $ print b
+      pure Runtime.Nil
+    (Runtime.LoxFunction _ _) -> do
+      liftIO $ putStrLn "some function"
+      pure Runtime.Nil
+eval (Expr.Var (WithPos _ _ _ (LoxTok (Identifier name) _)) e) = do
+  v <- maybe (pure Runtime.Nil) eval e
+  defineVar name v
+  pure Runtime.Void
+eval e@(Expr.Variable wp@(WithPos _ _ _ (LoxTok (Identifier name) _))) = do
+  env <- gets environment
+  -- printEnv >> printStore
+  addr <- lookupVar name env
+  readAddr addr
+eval e@(Expr.Assign (Variable wp@(WithPos _ _ _ (LoxTok (Identifier name) _))) r) = do
+  env <- gets environment
+  addr <- lookupVar name env
+  v <- eval r
+  writeAddr addr v
+  pure v
 eval (Expr.Block es) = do
   openNewClosure
   e <- last <$> traverse eval es
@@ -141,9 +103,9 @@ eval (Expr.Block es) = do
   pure e
   where
     openNewClosure :: Result ()
-    openNewClosure = modify $ \s -> s {environment = enclosed (environment s)}
+    openNewClosure = modify $ \st -> st {environment = enclosed (environment st)}
     closeNewClosure :: Result ()
-    closeNewClosure = modify $ \s -> s {environment = fromJust (parent $ environment s)}
+    closeNewClosure = modify $ \st -> st {environment = fromJust (parent $ environment st)}
 eval (Expr.If c e e') = do
   c' <- eval c
 
@@ -151,7 +113,7 @@ eval (Expr.If c e e') = do
     then eval e
     else case e' of
       Just e'' -> eval e''
-      Nothing -> pure Interpreter.Nil
+      Nothing -> pure Runtime.Nil
 eval (Expr.Or e1 e2) = do
   left <- eval e1
   if isTruthy left
@@ -166,109 +128,127 @@ eval (Expr.While c e) = do
   t <- eval c
   go $ isTruthy t
   where
-    go False = pure Interpreter.Void
+    go False = pure Runtime.Void
     go True = eval e >> (eval c >>= (go . isTruthy))
 eval (Expr.Call callable parens as) = do
-  st <- get -- current environment
-  let env = environment st
+  env <- gets environment
   e <- case callable of
-    Variable (WithPos _ _ _ (LoxTok (TokenType.Identifier n) _)) ->
-      case lookupVar n env of
-        Just v ->
-          case v of
-            -- when the callable is a function
-            LoxFunction f@(Function _ ps (Expr.Block es)) closure -> do
-              if length ps /= length as
-                then error "ps and as don't match"
-                else
-                  ( do
-                      oldEnv <- gets environment
-                      -- put $ enclosed $ closure {parent = Just oldEnv}
-                      modify $ \s -> s {environment = enclosed $ closure {parent = Just oldEnv}}
+    Variable (WithPos _ _ _ (LoxTok (TokenType.Identifier n) _)) -> do
+      addr <- lookupVar n env
+      v <- readAddr addr
+      case v of
+        -- when the callable is a function
+        LoxFunction f@(Function _ ps (Expr.Block es)) closure -> do
+          if length ps /= length as
+            then error "ps and as don't match"
+            else
+              ( do
+                  oldEnv <- gets environment
+                  vars <- evalArgsParams ps as
 
-                      populate ps as -- insert args/params values into the new env
-                      e <- (last <$> traverse eval es) `catchError` checkReturnOrError
+                  modify $ \s -> s {environment = enclosed closure}
 
-                      env' <- gets environment
-                      case parent env' of
-                        Just clo -> case assignVar oldEnv (n, LoxFunction f (emptyEnv {values = values clo})) of
-                          Just e' -> modify $ \s -> s {environment = e'}
-                          Nothing -> error "idk"
-                        Nothing -> error "idk"
+                  populate vars
 
-                      pure e
-                  )
-            _ -> error "unexpected"
-        Nothing -> error "function isn't defined"
+                  result <- (last <$> traverse eval es) `catchError` checkReturnOrError
+
+                  -- printEnv >> printStore
+
+                  modify $ \st -> st {environment = oldEnv}
+
+                  pure result
+              )
+        _ -> error "unexpected"
     _ -> error "function isn't a variable"
   pure e
   where
     checkReturnOrError :: Exception -> Result Value
     checkReturnOrError e@(ErrorTok _) = throwError e
     checkReturnOrError (ReturnException v) = liftEither $ Right v
-    -- args -> params
-    populate :: [WithPos LoxTok] -> [Expr] -> Result ()
-    populate as' ps =
-      do
-        vars <-
-          zipWithM
-            ( \a e ->
-                case a of
-                  (WithPos _ _ _ (LoxTok (TokenType.Identifier n) _)) ->
-                    do
-                      e' <- eval e
-                      pure (n, e')
-                  _ -> error "expected an identifier"
-            )
-            as'
-            ps
-        mapM_
-          ( \p ->
-              -- get >>= \e -> put $ setVar e p
-              modify $ \s -> s {environment = setVar (environment s) p}
-          )
-          vars
+    evalArgsParams :: [WithPos LoxTok] -> [Expr] -> Result [(String, Value)]
+
+    populate :: [(String, Value)] -> Result ()
+    populate = mapM_ (uncurry defineVar)
+    -- point-free (gets called with ps as')
+    evalArgsParams =
+      zipWithM
+        ( \p a ->
+            case p of
+              (WithPos _ _ _ (LoxTok (TokenType.Identifier n) _)) ->
+                do
+                  v <- eval a
+                  pure (n, v)
+              _ -> error "expected an identifier"
+        )
 eval (Expr.Return e) = do
   v <- eval e
   throwError $ ReturnException v
 eval f@(Expr.Function (WithPos _ _ _ (LoxTok (TokenType.Identifier n) _)) _ _) = do
   env <- gets environment
-  modify $ \s -> s {environment = setVar env (n, LoxFunction f env)}
-  pure Interpreter.Nil
+  defineVar n (LoxFunction f env)
+  -- just so the closure captures itself
+  env' <- gets environment
+  addr <- lookupVar n env'
+  writeAddr addr (LoxFunction f env')
+
+  pure Runtime.Nil
 eval _ = undefined
 
-assignVar :: Environment -> (String, Value) -> Maybe Environment
-assignVar env (n, v) = maybeAssignToEnv `mplus` maybeAssignToParentEnv
-  where
-    maybeAssignToEnv = M.lookup n (values env) >> return (setVar env (n, v))
-    maybeAssignToParentEnv = do
-      parentEnv <- parent env
-      parentEnv' <- assignVar parentEnv (n, v)
-      return $ env {parent = Just parentEnv'}
+--
+-- assignVar :: Environment -> (String, Value) -> Maybe Environment
+-- assignVar env (n, v) = maybeAssignToEnv `mplus` maybeAssignToParentEnv
+--   where
+--     maybeAssignToEnv = M.lookup n (values env) >> return (setVar env (n, v))
+--     maybeAssignToParentEnv = do
+--       parentEnv <- parent env
+--       parentEnv' <- assignVar parentEnv (n, v)
+--       return $ env {parent = Just parentEnv'}
+--
+-- lookupVar :: String -> Environment -> Maybe Value
+-- lookupVar s env = lookupCur `mplus` lookupEnclosing
+--   where
+--     lookupCur = M.lookup s (values env)
+--     lookupEnclosing = do
+--       parentEnv <- parent env
+--       lookupVar s parentEnv
+--
+-- setVar :: Environment -> (String, Value) -> Environment
+-- setVar env (n, v) = env {values = M.insert n v (values env)}
+--
+-- getVar :: Environment -> Locals -> (String, Expr) -> Maybe Value
+-- getVar env ls (name, e) = do
+--   case M.lookup e ls of
+--     Just distance -> Just $ getAt env distance name
+--     Nothing -> error "not implemented: lookup globals"
+--
+-- getAt :: Environment -> Int -> String -> Value
+-- getAt env distance n = do
+--   let vs = values $ ancestor env distance
+--   case M.lookup n vs of
+--     Just v -> v
+--     Nothing -> error $ "variable " <> n <> " isn't defined"
+--
+-- assignAt :: Environment -> Int -> (String, Value) -> Environment
+-- assignAt env distance (n, v) = go env 0
+--   where
+--     go :: Environment -> Int -> Environment
+--     go e@(Environment _ p _) d
+--       | d == distance = e {values = M.insert n v (values e)}
+--       | Just p <- (parent e) = e {parent = Just $ go p (d + 1)}
+--       | otherwise = error "assignAt: environment chain too short"
+--
+-- ancestor :: Environment -> Int -> Environment
+-- ancestor env d = go env 0
+--   where
+--     go :: Environment -> Int -> Environment
+--     go e@(Environment _ p _) d'
+--       | d == d' = e
+--       | otherwise = go (fromJust p) (d' + 1)
+--
+-- -- (trace $ formatEnv' env)
+--
 
-lookupVar :: String -> Environment -> Maybe Value
-lookupVar s env = lookupCur `mplus` lookupEnclosing
-  where
-    lookupCur = M.lookup s (values env)
-    lookupEnclosing = do
-      parentEnv <- parent env
-      lookupVar s parentEnv
-
-setVar :: Environment -> (String, Value) -> Environment
-setVar env (n, v) = env {values = M.insert n v (values env)}
-
-getVar :: Environment -> String -> Maybe Value
-getVar env n = maybeValueFromEnv `mplus` maybeValueFromParentEnv
-  where
-    maybeValueFromEnv = M.lookup n (values env)
-    maybeValueFromParentEnv = parent env >>= \e -> getVar e n
-
-enclosed :: Environment -> Environment
-enclosed env = emptyEnv {parent = Just env}
-
-emptyEnv :: Environment
-emptyEnv = Environment {values = M.empty, parent = Nothing, globals = M.empty}
-
+--
 isEqual :: Expr -> Expr -> Bool
 isEqual (Literal Expr.Nil) (Literal Expr.Nil) = True
 isEqual (Literal Expr.Nil) _ = False
@@ -277,47 +257,8 @@ isEqual (Literal (Expr.String s1)) (Literal (Expr.String s2)) = s1 == s2
 isEqual (Literal (Expr.Number n1)) (Literal (Expr.Number n2)) = n1 == n2
 isEqual _ _ = False
 
+--
 isTruthy :: Value -> Bool
-isTruthy Interpreter.Nil = False
-isTruthy (Interpreter.Boolean False) = False
+isTruthy Runtime.Nil = False
+isTruthy (Runtime.Boolean False) = False
 isTruthy _ = True
-
-printEnv :: Result ()
-printEnv = do
-  st <- get
-  let e = environment st
-  let s = go e 0
-  liftIO $ putStr s
-  where
-    go :: Environment -> Int -> String
-    go (Environment vals mparent _) depth =
-      indent depth
-        ++ "Environment\n"
-        ++ indent (depth + 1)
-        ++ "values: [\n"
-        ++ printValues vals (depth + 2)
-        ++ indent (depth + 1)
-        ++ "]\n"
-        ++ case mparent of
-          Nothing -> indent (depth + 1) ++ "parent: None\n"
-          Just parent -> indent (depth + 1) ++ "parent:\n" ++ go parent (depth + 2)
-
-    indent :: Int -> String
-    indent n = replicate (n * 2) ' '
-
-    printValues :: Env -> Int -> String
-    printValues env d
-      | M.null env = indent d ++ "-- empty --\n"
-      | otherwise = concatMap (printEntry d) (M.toList env)
-
-    printEntry :: Int -> (String, Value) -> String
-    printEntry d (k, v) = indent d ++ printf "(%s, %s)\n" k (printVal v)
-
-    printVal :: Value -> String
-    printVal v = case v of
-      Interpreter.Nil -> "Nil"
-      Interpreter.Void -> "Void"
-      Interpreter.Boolean b -> show b
-      Interpreter.Number n -> show n
-      Interpreter.String s -> show s
-      LoxFunction {} -> "LoxFunction <...>"

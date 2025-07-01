@@ -69,6 +69,7 @@ executable lox
                       Parser
                       Interpreter
                       Resolver
+                      Runtime
 
     -- LANGUAGE extensions used by modules in this package.
     -- other-extensions:
@@ -78,6 +79,8 @@ executable lox
                       bytestring, 
                       megaparsec, 
                       containers,
+                      unordered-containers,
+                      hashable,
                       text, 
                       split,
                       ansi-terminal,
